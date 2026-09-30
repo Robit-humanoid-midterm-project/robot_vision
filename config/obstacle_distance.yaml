@@ -1,0 +1,30 @@
+obstacle_distance:
+  ros__parameters:
+    image_topic: /camera1/camera/compressed_image
+    optical_frame_id: camera1_optical_frame
+    obstacle_size_m: 0.40
+    # Initial assumption only: these legacy K/D values belong to 640x480.
+    # Verify against measured range before using for robot control.
+    calibration_verified: false
+    calibration_width: 640
+    calibration_height: 480
+    camera_matrix: [471.953641, 0.0, 309.509126, 0.0, 476.574144, 228.222101, 0.0, 0.0, 1.0]
+    distortion_coefficients: [0.026101, -0.086354, -0.007248, -0.006668, 0.0]
+    red_lower_1: [0, 100, 60]
+    red_upper_1: [12, 255, 255]
+    red_lower_2: [168, 100, 60]
+    red_upper_2: [179, 255, 255]
+    blue_lower: [105, 170, 45]
+    blue_upper: [125, 255, 255]
+    min_area_px: 500.0
+    min_edge_px: 15.0
+    border_margin_px: 3
+    # Minimum overlap of a fitted quadrilateral and the color mask (IoU).
+    min_fill_ratio: 0.80
+    max_reprojection_error_px: 3.5
+    max_relative_reprojection_error: 0.03
+    min_distance_m: 0.2
+    max_distance_m: 10.0
+    max_processing_fps: 15.0
+    image_timeout_s: 1.0
+    viewer: true
