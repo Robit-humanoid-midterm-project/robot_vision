@@ -47,6 +47,21 @@ bool finite_vec(const cv::Vec3d &value) {
 
 }  // namespace
 
+std::optional<GroundProjection> project_to_ground(
+    const Detection &detection, double camera_height_m) {
+  const double range = detection.distance_m;
+  const double lateral = detection.position[0];
+  if (!std::isfinite(range) || !std::isfinite(lateral) ||
+      !std::isfinite(camera_height_m) || camera_height_m <= 0 ||
+      range < camera_height_m) return std::nullopt;
+  const double radial_squared = (range - camera_height_m) *
+                                (range + camera_height_m);
+  const double forward_squared = radial_squared - lateral * lateral;
+  if (forward_squared < 0) return std::nullopt;
+  return GroundProjection{std::sqrt(forward_squared),
+                          std::sqrt(radial_squared), lateral};
+}
+
 DistanceEstimator::DistanceEstimator(DetectorConfig config) : config_(std::move(config)) {
   if (config_.camera_matrix.size() != 9 ||
       std::find_if(config_.camera_matrix.begin(), config_.camera_matrix.end(),
@@ -127,8 +142,14 @@ std::optional<Detection> DistanceEstimator::square_pose(
       if (!std::isfinite(error)) continue;
       if (!best || error < best->reprojection_error_px) {
         Detection detection;
-        detection.position = t;
-        detection.distance_m = cv::norm(t);
+        // The square's bottom-edge midpoint is local (0, -s, 0).
+        const cv::Vec3d bottom{
+            t[0] - s * matrix.at<double>(0, 1),
+            t[1] - s * matrix.at<double>(1, 1),
+            t[2] - s * matrix.at<double>(2, 1)};
+        if (!finite_vec(bottom) || bottom[2] <= 0) continue;
+        detection.position = bottom;
+        detection.distance_m = cv::norm(bottom);
         detection.reprojection_error_px = error;
         detection.corners = corners;
         best = detection;
@@ -216,7 +237,7 @@ std::optional<Detection> DistanceEstimator::pose_for_contour(
 
 std::vector<std::vector<cv::Point>> DistanceEstimator::split_touching_color(
     const std::vector<cv::Point> &contour, const cv::Mat &mask,
-    const cv::Mat &hsv, cv::Mat &saturated) const {
+    const cv::Mat &hsv, int min_saturation, cv::Mat &saturated) const {
   cv::Mat component = cv::Mat::zeros(mask.size(), CV_8UC1);
   cv::drawContours(component, std::vector<std::vector<cv::Point>>{contour}, 0,
                    cv::Scalar(255), cv::FILLED);
@@ -251,7 +272,7 @@ std::vector<std::vector<cv::Point>> DistanceEstimator::split_touching_color(
   const double otsu = cv::threshold(sample_mat, ignored, 0, 255,
                                     cv::THRESH_BINARY | cv::THRESH_OTSU);
   const int cutoff = std::min(255, std::max(static_cast<int>(otsu) + 3,
-                                            config_.blue_lower[1] + 3));
+                                            min_saturation + 3));
   saturated = cv::Mat::zeros(mask.size(), CV_8UC1);
   for (int y = 0; y < mask.rows; ++y) {
     const auto *m = mask.ptr<uint8_t>(y);
@@ -278,7 +299,7 @@ std::optional<Detection> DistanceEstimator::line_pose_for_component(
     const std::vector<cv::Point> &contour, const cv::Mat &mask,
     const cv::Mat &bgr) const {
   // A near-frontal square can be recovered when same-colored objects merge:
-  // use four visible image edges surrounding the largest blue interior.
+  // use four visible image edges surrounding the largest colored interior.
   const cv::Rect bounds = cv::boundingRect(contour);
   if (bounds.x <= config_.border_margin_px || bounds.y <= config_.border_margin_px ||
       bounds.x + bounds.width >= bgr.cols - config_.border_margin_px ||
@@ -357,9 +378,9 @@ std::optional<Detection> DistanceEstimator::line_pose_for_component(
   std::vector<cv::Point> polygon;
   for (const auto &corner : corners) polygon.emplace_back(cvRound(corner.x), cvRound(corner.y));
   cv::fillConvexPoly(rectangle, polygon, cv::Scalar(255));
-  cv::Mat blue_inside;
-  cv::bitwise_and(mask, rectangle, blue_inside);
-  const double occupancy = static_cast<double>(cv::countNonZero(blue_inside)) /
+  cv::Mat color_inside;
+  cv::bitwise_and(mask, rectangle, color_inside);
+  const double occupancy = static_cast<double>(cv::countNonZero(color_inside)) /
                            std::max(1, cv::countNonZero(rectangle));
   if (occupancy < 0.85) return std::nullopt;
   auto pose = square_pose(corners);
@@ -394,31 +415,42 @@ DetectResult DistanceEstimator::detect(const cv::Mat &bgr) const {
   cv::bitwise_or(red1, red2, red);
   cv::inRange(hsv, hsv_scalar(config_.blue_lower), hsv_scalar(config_.blue_upper), blue);
   const cv::Mat kernel = cv::Mat::ones(3, 3, CV_8UC1);
+  int color_index = 0;
   for (auto &entry : std::vector<std::pair<std::string, cv::Mat>>{{"red", red}, {"blue", blue}}) {
+    auto &debug = result.colors[color_index++];
     cv::Mat &mask = entry.second;
+    debug.raw_mask = mask.clone();
+    debug.raw_pixels = cv::countNonZero(mask);
     cv::morphologyEx(mask, mask, cv::MORPH_OPEN, kernel);
     cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, kernel);
+    debug.cleaned_mask = mask.clone();
+    debug.cleaned_pixels = cv::countNonZero(mask);
     result.mask_preview.setTo(entry.first == "red" ? cv::Scalar(0, 0, 255) :
                                                      cv::Scalar(255, 0, 0), mask);
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    debug.candidate_contours = static_cast<int>(contours.size());
     for (const auto &contour : contours) {
       auto pose = pose_for_contour(contour, mask, bgr.size(), false);
       if (pose) {
         pose->color = entry.first;
         result.detections.push_back(*pose);
+        ++debug.detections;
         continue;
       }
-      if (entry.first != "blue" ||
-          cv::contourArea(contour) < 3.0 * config_.min_area_px) continue;
+      if (cv::contourArea(contour) < 3.0 * config_.min_area_px) continue;
+      const int min_saturation = entry.first == "red" ?
+          std::min(config_.red_lower_1[1], config_.red_lower_2[1]) : config_.blue_lower[1];
       cv::Mat saturated;
       bool recovered = false;
-      for (const auto &part : split_touching_color(contour, mask, hsv, saturated)) {
+      for (const auto &part : split_touching_color(contour, mask, hsv,
+                                                    min_saturation, saturated)) {
         pose = pose_for_contour(part, saturated, bgr.size(), true);
         if (pose) {
           pose->color = entry.first;
           pose->color_split_estimate = true;
           result.detections.push_back(*pose);
+          ++debug.detections;
           recovered = true;
         }
       }
@@ -427,6 +459,7 @@ DetectResult DistanceEstimator::detect(const cv::Mat &bgr) const {
         if (pose) {
           pose->color = entry.first;
           result.detections.push_back(*pose);
+          ++debug.detections;
         }
       }
     }

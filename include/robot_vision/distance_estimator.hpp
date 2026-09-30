@@ -19,6 +19,15 @@ struct Detection {
   std::array<cv::Point2d, 4> corners{};
 };
 
+struct GroundProjection {
+  double forward_m{0.0};
+  double radial_m{0.0};
+  double lateral_m{0.0};
+};
+
+std::optional<GroundProjection> project_to_ground(
+    const Detection &detection, double camera_height_m);
+
 struct DetectorConfig {
   double obstacle_size_m{0.4};
   int calibration_width{640};
@@ -42,9 +51,19 @@ struct DetectorConfig {
   double max_distance_m{10};
 };
 
+struct ColorDebug {
+  cv::Mat raw_mask;
+  cv::Mat cleaned_mask;
+  int raw_pixels{0};
+  int cleaned_pixels{0};
+  int candidate_contours{0};
+  int detections{0};
+};
+
 struct DetectResult {
   std::vector<Detection> detections;
   cv::Mat mask_preview;
+  std::array<ColorDebug, 2> colors;  // red, blue
   std::string status;
 };
 
@@ -64,7 +83,7 @@ class DistanceEstimator {
       const cv::Mat &bgr) const;
   std::vector<std::vector<cv::Point>> split_touching_color(
       const std::vector<cv::Point> &contour, const cv::Mat &mask,
-      const cv::Mat &hsv, cv::Mat &saturated) const;
+      const cv::Mat &hsv, int min_saturation, cv::Mat &saturated) const;
 
   DetectorConfig config_;
   cv::Mat camera_matrix_;

@@ -3,6 +3,8 @@ obstacle_distance:
     image_topic: /camera1/camera/compressed_image
     optical_frame_id: camera1_optical_frame
     obstacle_size_m: 0.40
+    # Lens center height above the same level floor as the obstacle base.
+    camera_height_m: 0.75
     # Initial assumption only: these legacy K/D values belong to 640x480.
     # Verify against measured range before using for robot control.
     calibration_verified: false
@@ -28,3 +30,4 @@ obstacle_distance:
     max_processing_fps: 15.0
     image_timeout_s: 1.0
     viewer: true
+    show_preprocess: true

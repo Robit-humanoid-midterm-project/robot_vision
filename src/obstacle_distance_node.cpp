@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <iomanip>
 #include <memory>
@@ -17,6 +18,7 @@
 #include <sensor_msgs/msg/image.hpp>
 
 #include "robot_vision/distance_estimator.hpp"
+#include "robot_vision/row_line_estimator.hpp"
 #include "robot_vision/msg/obstacle_array.hpp"
 #include "robot_vision/msg/obstacle_detection.hpp"
 
@@ -49,6 +51,7 @@ class ObstacleDistanceNode final : public rclcpp::Node {
     optical_frame_id_ = declare_parameter<std::string>("optical_frame_id", "camera1_optical_frame", fixed);
     viewer_ = declare_parameter<bool>("viewer", true, fixed) &&
               (std::getenv("DISPLAY") != nullptr || std::getenv("WAYLAND_DISPLAY") != nullptr);
+    show_preprocess_ = declare_parameter<bool>("show_preprocess", true, fixed);
     max_processing_fps_ = declare_parameter<double>("max_processing_fps", 15.0, fixed);
     image_timeout_s_ = declare_parameter<double>("image_timeout_s", 1.0, fixed);
     if (max_processing_fps_ <= 0 || image_timeout_s_ <= 0) {
@@ -57,6 +60,10 @@ class ObstacleDistanceNode final : public rclcpp::Node {
 
     DetectorConfig config;
     config.obstacle_size_m = declare_parameter<double>("obstacle_size_m", config.obstacle_size_m, fixed);
+    camera_height_m_ = declare_parameter<double>("camera_height_m", 0.75, fixed);
+    if (!std::isfinite(camera_height_m_) || camera_height_m_ <= 0) {
+      throw std::invalid_argument("camera_height_m must be positive and finite");
+    }
     config.calibration_width = declare_parameter<int>("calibration_width", config.calibration_width, fixed);
     config.calibration_height = declare_parameter<int>("calibration_height", config.calibration_height, fixed);
     config.calibration_verified = declare_parameter<bool>("calibration_verified", false, fixed);
@@ -87,12 +94,15 @@ class ObstacleDistanceNode final : public rclcpp::Node {
     config.min_distance_m = declare_parameter<double>("min_distance_m", config.min_distance_m, fixed);
     config.max_distance_m = declare_parameter<double>("max_distance_m", config.max_distance_m, fixed);
     calibration_verified_ = config.calibration_verified;
+    debug_config_ = config;
     estimator_ = std::make_unique<DistanceEstimator>(std::move(config));
 
     const auto image_qos = rclcpp::SensorDataQoS().keep_last(1);
     output_pub_ = create_publisher<msg::ObstacleArray>("/vision/obstacles", rclcpp::QoS(1));
     debug_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/obstacle_debug", image_qos);
     mask_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/obstacle_mask", image_qos);
+    preprocess_pub_ = create_publisher<sensor_msgs::msg::Image>(
+        "/vision/obstacle_preprocess", image_qos);
     image_sub_ = create_subscription<sensor_msgs::msg::Image>(
         image_topic_, image_qos,
         [this](sensor_msgs::msg::Image::ConstSharedPtr image) { on_image(image); });
@@ -105,7 +115,10 @@ class ObstacleDistanceNode final : public rclcpp::Node {
   }
 
   ~ObstacleDistanceNode() override {
-    if (viewer_) cv::destroyWindow(window_name_);
+    if (viewer_) {
+      cv::destroyWindow(window_name_);
+      if (show_preprocess_) cv::destroyWindow(preprocess_window_name_);
+    }
   }
 
  private:
@@ -124,6 +137,57 @@ class ObstacleDistanceNode final : public rclcpp::Node {
       cv::imshow(window_name_, image);
       cv::waitKey(1);
     }
+  }
+
+  cv::Mat preprocess_view(const DetectResult &result) const {
+    cv::Mat canvas(610, 640, CV_8UC3, cv::Scalar(22, 22, 22));
+    auto put = [&](const std::string &label, int x, int y, double scale = 0.46) {
+      cv::putText(canvas, label, {x, y}, cv::FONT_HERSHEY_SIMPLEX,
+                  scale, cv::Scalar(235, 235, 235), 1);
+    };
+    const auto &r = debug_config_;
+    put("RED H " + std::to_string(r.red_lower_1[0]) + "-" +
+        std::to_string(r.red_upper_1[0]) + ", " +
+        std::to_string(r.red_lower_2[0]) + "-" +
+        std::to_string(r.red_upper_2[0]) + "  S>= " +
+        std::to_string(std::min(r.red_lower_1[1], r.red_lower_2[1])) +
+        "  V>= " + std::to_string(std::min(r.red_lower_1[2], r.red_lower_2[2])), 8, 19);
+    put("BLUE H " + std::to_string(r.blue_lower[0]) + "-" +
+        std::to_string(r.blue_upper[0]) + "  S>= " +
+        std::to_string(r.blue_lower[1]) + "  V>= " +
+        std::to_string(r.blue_lower[2]), 8, 39);
+    put("White = selected pixels | RAW = HSV | CLEAN = open + close", 8, 62, 0.42);
+    for (int i = 0; i < 2; ++i) {
+      const auto &color = result.colors[i];
+      for (int stage = 0; stage < 2; ++stage) {
+        const int x = stage * 320, y = 80 + i * 230;
+        const cv::Mat &mask = stage == 0 ? color.raw_mask : color.cleaned_mask;
+        put(std::string(i == 0 ? "RED " : "BLUE ") +
+            (stage == 0 ? "RAW " : "CLEAN ") +
+            std::to_string(stage == 0 ? color.raw_pixels : color.cleaned_pixels) + " px",
+            x + 8, y + 16, 0.42);
+        if (!mask.empty()) {
+          cv::Mat scaled, rgb;
+          cv::resize(mask, scaled, {320, 210}, 0, 0, cv::INTER_NEAREST);
+          cv::cvtColor(scaled, rgb, cv::COLOR_GRAY2BGR);
+          rgb.copyTo(canvas(cv::Rect(x, y + 20, 320, 210)));
+        }
+      }
+    }
+    put("RED components " + std::to_string(result.colors[0].candidate_contours) +
+        " detected " + std::to_string(result.colors[0].detections) +
+        " | BLUE components " + std::to_string(result.colors[1].candidate_contours) +
+        " detected " + std::to_string(result.colors[1].detections), 8, 561, 0.42);
+    int y = 584;
+    for (const auto &detection : result.detections) {
+      if (y > 604) break;
+      put((detection.color == "red" ? "R" : "B") +
+          std::string(" fit ") + two_decimals(detection.shape_fit) +
+          " reproj " + two_decimals(detection.reprojection_error_px) + " px" +
+          (detection.color_split_estimate ? " approx" : ""), 8, y, 0.42);
+      y += 18;
+    }
+    return canvas;
   }
 
   void publish_image(const rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr &publisher,
@@ -151,7 +215,15 @@ class ObstacleDistanceNode final : public rclcpp::Node {
     cv::putText(canvas, image_topic_, {15, 245}, cv::FONT_HERSHEY_SIMPLEX,
                 0.5, cv::Scalar(255, 255, 255), 1);
     publish_image(debug_pub_, canvas, array.header);
+    cv::Mat preprocess(610, 640, CV_8UC3, cv::Scalar::all(0));
+    cv::putText(preprocess, "NO CAMERA IMAGE", {40, 300},
+                cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 200, 255), 2);
+    publish_image(preprocess_pub_, preprocess, array.header);
     show(canvas);
+    if (viewer_ && show_preprocess_) {
+      cv::imshow(preprocess_window_name_, preprocess);
+      cv::waitKey(1);
+    }
   }
 
   void on_image(const sensor_msgs::msg::Image::ConstSharedPtr &image) {
@@ -178,6 +250,27 @@ class ObstacleDistanceNode final : public rclcpp::Node {
     last_received_ = now;
     auto array = make_message(image->header.stamp, result.status);
     cv::Mat canvas = frame.clone();
+    const auto row_lines = estimate_row_lines(result.colors, result.detections,
+                                              frame.size());
+    for (const auto &row : row_lines) {
+      const cv::Point2d span = row.last - row.first;
+      const double length = cv::norm(span);
+      if (length > 0) {
+        for (double offset = 0; offset < length; offset += 20.0) {
+          const double end = std::min(offset + 12.0, length);
+          cv::line(canvas,
+                   row.first + cv::Point(cvRound(span.x * offset / length),
+                                         cvRound(span.y * offset / length)),
+                   row.first + cv::Point(cvRound(span.x * end / length),
+                                         cvRound(span.y * end / length)),
+                   cv::Scalar(0, 220, 255), 2, cv::LINE_AA);
+        }
+      }
+      for (const auto &segment : row.observed) {
+        cv::line(canvas, segment.first, segment.last,
+                 cv::Scalar(0, 255, 0), 3, cv::LINE_AA);
+      }
+    }
     bool any_split = false;
     for (const auto &detection : result.detections) {
       msg::ObstacleDetection item;
@@ -186,6 +279,12 @@ class ObstacleDistanceNode final : public rclcpp::Node {
       item.position.y = detection.position[1];
       item.position.z = detection.position[2];
       item.distance_m = detection.distance_m;
+      if (const auto ground = project_to_ground(detection, camera_height_m_)) {
+        item.ground_distance_m = ground->radial_m;
+        item.ground_distance_valid = true;
+        item.forward_distance_m = ground->forward_m;
+        item.forward_distance_valid = true;
+      }
       item.color_split_estimate = detection.color_split_estimate;
       item.reprojection_error_px = detection.reprojection_error_px;
       const cv::Scalar color = item.color == "red" ? cv::Scalar(0, 50, 255) : cv::Scalar(255, 160, 0);
@@ -205,12 +304,15 @@ class ObstacleDistanceNode final : public rclcpp::Node {
         min_y = std::min(min_y, point.y);
       }
       const int x = std::clamp(min_x, 2, std::max(2, canvas.cols - 300));
-      const int y = std::clamp(min_y, 70, std::max(70, canvas.rows - 42));
+      const int y = std::clamp(min_y, 70, std::max(70, canvas.rows - 82));
       const std::vector<std::string> labels{
-          (item.color == "red" ? "RED" : "BLUE") + std::string("  RANGE ") +
+          (item.color == "red" ? "RED" : "BLUE") + std::string("  BOTTOM ") +
               (item.color_split_estimate ? "~" : "") + two_decimals(item.distance_m) + " m",
-          "Z " + two_decimals(item.position.z) + " m  X " +
-              signed_two_decimals(item.position.x) + " m"};
+          "X FORWARD " + (item.forward_distance_valid ?
+              two_decimals(item.forward_distance_m) + " m" : "--"),
+          "Y GROUND " + (item.ground_distance_valid ?
+              two_decimals(item.ground_distance_m) + " m" : "--"),
+          "L/R " + signed_two_decimals(item.position.x) + " m"};
       for (size_t i = 0; i < labels.size(); ++i) {
         const cv::Point origin{x, y + static_cast<int>(i) * 19};
         cv::putText(canvas, labels[i], origin, cv::FONT_HERSHEY_SIMPLEX,
@@ -226,22 +328,35 @@ class ObstacleDistanceNode final : public rclcpp::Node {
     cv::putText(canvas, banner, {8, 18}, cv::FONT_HERSHEY_SIMPLEX,
                 0.48, cv::Scalar(0, 220, 255), 1);
     const std::string note = any_split ? "~ = touching colors, check distance" :
-                                         "RANGE = camera to face center";
-    cv::putText(canvas, "Detected: " + std::to_string(result.detections.size()) + " | " + note,
-                {8, 37}, cv::FONT_HERSHEY_SIMPLEX, 0.43, cv::Scalar(255, 255, 255), 1);
+                                         "BOTTOM = lens to lower edge midpoint";
+    cv::putText(canvas, "Detected: " + std::to_string(result.detections.size()) +
+                " | row lines: " + std::to_string(row_lines.size()) + " | " + note,
+                {8, 37}, cv::FONT_HERSHEY_SIMPLEX, 0.39, cv::Scalar(255, 255, 255), 1);
+    cv::putText(canvas, "GREEN = visible base    YELLOW DASH = estimated row",
+                {8, 62}, cv::FONT_HERSHEY_SIMPLEX, 0.39, cv::Scalar(0, 0, 0), 3);
+    cv::putText(canvas, "GREEN = visible base    YELLOW DASH = estimated row",
+                {8, 62}, cv::FONT_HERSHEY_SIMPLEX, 0.39, cv::Scalar(255, 255, 255), 1);
     output_pub_->publish(array);
     publish_image(debug_pub_, canvas, image->header);
     publish_image(mask_pub_, result.mask_preview, image->header);
+    const cv::Mat preprocess = preprocess_view(result);
+    publish_image(preprocess_pub_, preprocess, image->header);
     show(canvas);
+    if (viewer_ && show_preprocess_) {
+      cv::imshow(preprocess_window_name_, preprocess);
+      cv::waitKey(1);
+    }
   }
 
   std::string image_topic_, optical_frame_id_;
   const std::string window_name_ = "Obstacle distance - RED / BLUE - 40cm";
-  bool viewer_{false}, calibration_verified_{false};
-  double max_processing_fps_{15}, image_timeout_s_{1};
+  const std::string preprocess_window_name_ = "Obstacle preprocess - RED / BLUE";
+  bool viewer_{false}, show_preprocess_{true}, calibration_verified_{false};
+  DetectorConfig debug_config_;
+  double max_processing_fps_{15}, image_timeout_s_{1}, camera_height_m_{0.75};
   std::unique_ptr<DistanceEstimator> estimator_;
   rclcpp::Publisher<msg::ObstacleArray>::SharedPtr output_pub_;
-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_, mask_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_, mask_pub_, preprocess_pub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
   rclcpp::TimerBase::SharedPtr watchdog_;
   bool have_image_{false}, have_processed_{false}, have_empty_{false};
