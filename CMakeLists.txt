@@ -14,10 +14,11 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ObstacleDetection.msg" "msg/ObstacleArray.msg"
+  "msg/LaneLine.msg"
   DEPENDENCIES std_msgs geometry_msgs)
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
-add_library(distance_estimator STATIC src/distance_estimator.cpp src/row_line_estimator.cpp)
+add_library(distance_estimator STATIC src/distance_estimator.cpp src/row_line_estimator.cpp src/lane_line_estimator.cpp)
 target_include_directories(distance_estimator PUBLIC include ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(distance_estimator PUBLIC ${OpenCV_LIBRARIES})
 

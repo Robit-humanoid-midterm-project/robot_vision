@@ -4,7 +4,7 @@ obstacle_distance:
     optical_frame_id: camera1_optical_frame
     obstacle_size_m: 0.40
     # Lens center height above the same level floor as the obstacle base.
-    camera_height_m: 0.75
+    camera_height_m: 0.60
     # Initial assumption only: these legacy K/D values belong to 640x480.
     # Verify against measured range before using for robot control.
     calibration_verified: false
@@ -29,5 +29,27 @@ obstacle_distance:
     max_distance_m: 10.0
     max_processing_fps: 15.0
     image_timeout_s: 1.0
+    # At most 3 obstacle rows; average matching lines from recent frames.
+    row_smoothing_frames: 5
+    row_match_y_px: 35.0
+    row_match_slope: 0.18
+    row_track_max_missing_frames: 3
     viewer: true
+    viewer_fullscreen: true
     show_preprocess: true
+    # Single white straight boundary; pixel distance only until field calibration.
+    lane_white_max_saturation: 85
+    lane_white_min_value: 175
+    lane_grass_hue_min: 30
+    lane_grass_hue_max: 95
+    lane_grass_min_saturation: 45
+    lane_roi_top_fraction: 0.18
+    lane_reference_y_fraction: 0.85
+    lane_candidate_min_bottom_y_fraction: 0.70
+    lane_min_abs_dx_per_dy: 0.35
+    lane_max_abs_dx_per_dy: 2.3
+    lane_min_observed_height_fraction: 0.18
+    lane_max_fit_error_px: 8.0
+    lane_group_tolerance_px: 18.0
+    lane_min_grass_support: 0.60
+    lane_bottom_outer_fraction: 0.35

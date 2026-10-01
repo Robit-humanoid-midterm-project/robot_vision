@@ -12,6 +12,7 @@
 
 #include "robot_vision/distance_estimator.hpp"
 #include "robot_vision/row_line_estimator.hpp"
+#include "robot_vision/lane_line_estimator.hpp"
 
 namespace {
 
@@ -40,6 +41,63 @@ cv::Scalar hsv_to_bgr(int saturation) {
   return cv::Scalar(pixel[0], pixel[1], pixel[2]);
 }
 
+TEST(LaneLineCpp, SelectsOneStraightBoundaryAndPixelGap) {
+  cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
+  cv::line(image, {300, 110}, {100, 479}, cv::Scalar::all(255), 7);
+  cv::rectangle(image, {0, 270}, {639, 330}, cv::Scalar(35, 90, 35), cv::FILLED);
+  cv::ellipse(image, {420, 350}, {100, 90}, 0, 0, 180, cv::Scalar::all(255), 7);
+  const auto result = robot_vision::estimate_lane_line(image, {});
+  ASSERT_TRUE(result.best.valid);
+  EXPECT_EQ(result.best.side, "left");
+  EXPECT_NEAR(result.best.bottom.x, 100, 20);
+  EXPECT_GT(result.best.pixel_separation_px, 100);
+}
+
+TEST(LaneLineCpp, IgnoresUpperShelfLineAndKeepsLowerBoundary) {
+  cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
+  cv::line(image, {100, 90}, {350, 290}, cv::Scalar::all(255), 8);
+  EXPECT_FALSE(robot_vision::estimate_lane_line(image, {}).best.valid);
+  cv::line(image, {185, 340}, {15, 479}, cv::Scalar::all(255), 8);
+  const auto result = robot_vision::estimate_lane_line(image, {});
+  ASSERT_TRUE(result.best.valid);
+  EXPECT_EQ(result.best.side, "left");
+  EXPECT_LT(result.best.bottom.x, 75);
+}
+
+TEST(LaneLineCpp, RejectsSemicircleWithoutStraightBoundary) {
+  cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
+  cv::ellipse(image, {320, 310}, {140, 130}, 0, 0, 180,
+              cv::Scalar::all(255), 7);
+  EXPECT_FALSE(robot_vision::estimate_lane_line(image, {}).best.valid);
+}
+
+TEST(LaneLineCpp, RejectsWhiteBackgroundWithoutGrass) {
+  cv::Mat image(480, 640, CV_8UC3, cv::Scalar::all(90));
+  cv::line(image, {300, 110}, {100, 479}, cv::Scalar::all(255), 7);
+  EXPECT_FALSE(robot_vision::estimate_lane_line(image, {}).best.valid);
+}
+
+TEST(LaneLineCpp, ReferenceImageWhenAvailable) {
+  const char *path = std::getenv("ROBOT_VISION_SINGLE_LANE_IMAGE");
+  if (!path) GTEST_SKIP() << "No reference image supplied";
+  const cv::Mat screenshot = cv::imread(path);
+  ASSERT_GE(screenshot.cols, 640);
+  ASSERT_GE(screenshot.rows, 480);
+  const auto result = robot_vision::estimate_lane_line(
+      screenshot(cv::Rect(0, 0, 640, 480)), {});
+  const char *expected = std::getenv("ROBOT_VISION_SINGLE_LANE_EXPECT_SIDE");
+  if (expected && std::string(expected) == "none") {
+    EXPECT_FALSE(result.best.valid);
+  } else {
+    EXPECT_TRUE(result.best.valid);
+    if (result.best.valid) {
+      EXPECT_TRUE(result.best.side == "left" || result.best.side == "right");
+      EXPECT_GE(result.best.grass_support, 0.60);
+      if (expected) EXPECT_EQ(result.best.side, expected) << "x=" << result.best.bottom.x;
+    }
+  }
+}
+
 TEST(DistanceEstimatorCpp, ExtendsExposedLowerEdgeThroughPartialOcclusion) {
   std::array<robot_vision::ColorDebug, 2> colors;
   colors[0].cleaned_mask = cv::Mat::zeros(480, 640, CV_8UC1);
@@ -64,6 +122,39 @@ TEST(DistanceEstimatorCpp, MergesTwoVisibleBasesOnSameRow) {
   ASSERT_EQ(rows.size(), 1u);
   EXPECT_GE(rows[0].observed.size(), 2u);
   EXPECT_NEAR(rows[0].first.y, 330, 5);
+}
+
+TEST(DistanceEstimatorCpp, LimitsRandomColorRowsToThree) {
+  std::array<robot_vision::ColorDebug, 2> colors;
+  for (auto &color : colors)
+    color.cleaned_mask = cv::Mat::zeros(480, 640, CV_8UC1);
+  const std::array<cv::Rect, 4> bases{{{40, 40, 120, 55}, {280, 140, 115, 55},
+                                       {100, 245, 110, 55}, {430, 350, 120, 55}}};
+  for (size_t i = 0; i < bases.size(); ++i)
+    cv::rectangle(colors[i % 2].cleaned_mask, bases[i], 255, cv::FILLED);
+  const auto rows = robot_vision::estimate_row_lines(colors, {}, {640, 480});
+  ASSERT_EQ(rows.size(), 3u);
+  for (const auto &row : rows) EXPECT_FALSE(row.observed.empty());
+}
+
+TEST(DistanceEstimatorCpp, AveragesMatchingRowButDoesNotDrawMissingRow) {
+  robot_vision::RowLineTracker tracker(3, 35.0, 0.18, 3);
+  auto make_row = [](int y) {
+    return robot_vision::RowLine{{0, y}, {639, y}, {}, 1};
+  };
+  auto first = tracker.smooth({make_row(200)}, {640, 480});
+  ASSERT_EQ(first.size(), 1u);
+  EXPECT_EQ(first[0].first.y, 200);
+  auto second = tracker.smooth({make_row(212)}, {640, 480});
+  ASSERT_EQ(second.size(), 1u);
+  EXPECT_EQ(second[0].first.y, 206);
+  EXPECT_TRUE(tracker.smooth({}, {640, 480}).empty());
+  auto third = tracker.smooth({make_row(218)}, {640, 480});
+  ASSERT_EQ(third.size(), 1u);
+  EXPECT_EQ(third[0].first.y, 210);
+  auto unrelated = tracker.smooth({make_row(350)}, {640, 480});
+  ASSERT_EQ(unrelated.size(), 1u);
+  EXPECT_EQ(unrelated[0].first.y, 350);
 }
 
 TEST(DistanceEstimatorCpp, GroundProjectionSeparatesForwardAndLateral) {

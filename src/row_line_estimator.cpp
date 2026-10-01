@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
+#include <stdexcept>
 
 #include <opencv2/imgproc.hpp>
 
@@ -130,7 +132,13 @@ std::vector<RowLine> estimate_row_lines(
     if (candidate.segment.from_square) ++match->square_support;
   }
 
-  std::vector<RowLine> result;
+  struct RankedRow {
+    RowLine row;
+    double center_y;
+    double slope;
+    double score;
+  };
+  std::vector<RankedRow> ranked;
   const cv::Rect frame(0, 0, image_size.width, image_size.height);
   for (const auto &group : groups) {
     const double y = group.weighted_y / group.total_weight;
@@ -139,9 +147,119 @@ std::vector<RowLine> estimate_row_lines(
     cv::Point last(image_size.width - 1,
                    cvRound(y + slope * (image_size.width - 1 - center_x)));
     if (!cv::clipLine(frame, first, last)) continue;
-    result.push_back({first, last, group.observed, group.square_support});
+    double visible_length = 0;
+    for (const auto &segment : group.observed)
+      visible_length += cv::norm(segment.last - segment.first);
+    // A detected square base is stronger evidence than a mask-only edge.
+    const double score = 200.0 * group.square_support + visible_length;
+    ranked.push_back({{first, last, group.observed, group.square_support},
+                      y, slope, score});
   }
+  std::sort(ranked.begin(), ranked.end(),
+            [](const RankedRow &a, const RankedRow &b) {
+              return a.score > b.score;
+            });
+  std::vector<RankedRow> selected;
+  for (const auto &candidate : ranked) {
+    bool duplicate = false;
+    for (const auto &existing : selected) {
+      if (std::abs(candidate.center_y - existing.center_y) < 24.0 &&
+          std::abs(candidate.slope - existing.slope) < 0.15) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (!duplicate) selected.push_back(candidate);
+    if (selected.size() == 3) break;  // The field has only three obstacle rows.
+  }
+  std::sort(selected.begin(), selected.end(),
+            [](const RankedRow &a, const RankedRow &b) {
+              return a.center_y < b.center_y;
+            });
+  std::vector<RowLine> result;
+  for (auto &item : selected) result.push_back(std::move(item.row));
   return result;
+}
+
+RowLineTracker::RowLineTracker(int history_frames, double match_y_px,
+                               double match_slope, int max_missing_frames)
+    : history_frames_(history_frames), max_missing_frames_(max_missing_frames),
+      match_y_px_(match_y_px), match_slope_(match_slope) {
+  if (history_frames < 1 || history_frames > 30 || match_y_px <= 0 ||
+      match_slope <= 0 || max_missing_frames < 0 || max_missing_frames > 30)
+    throw std::invalid_argument("Invalid row smoothing parameters");
+}
+
+void RowLineTracker::reset() {
+  tracks_.clear();
+  previous_size_ = {};
+}
+
+std::vector<RowLine> RowLineTracker::smooth(const std::vector<RowLine> &rows,
+                                           const cv::Size &image_size) {
+  if (image_size.width <= 0 || image_size.height <= 0)
+    throw std::invalid_argument("Invalid row image size");
+  if (previous_size_ != image_size) reset();
+  previous_size_ = image_size;
+  for (auto &track : tracks_) ++track.missing_frames;
+  const double center_x = (image_size.width - 1) * 0.5;
+  std::vector<bool> used(tracks_.size(), false);
+  std::vector<RowLine> output;
+  const cv::Rect frame(0, 0, image_size.width, image_size.height);
+  for (const auto &row : rows) {
+    const double dx = row.last.x - row.first.x;
+    if (std::abs(dx) < 1.0) continue;
+    const double slope = (row.last.y - row.first.y) / dx;
+    const double y = row.first.y + slope * (center_x - row.first.x);
+    size_t match = tracks_.size();
+    double best_cost = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < tracks_.size(); ++i) {
+      if (used[i] || tracks_[i].samples.empty() ||
+          tracks_[i].missing_frames > max_missing_frames_ + 1) continue;
+      const auto &last = tracks_[i].samples.back();
+      const double dy = std::abs(y - last[0]);
+      const double ds = std::abs(slope - last[1]);
+      if (dy >= match_y_px_ || ds >= match_slope_) continue;
+      const double cost = dy + ds * 100.0;
+      if (cost < best_cost) { match = i; best_cost = cost; }
+    }
+    if (match == tracks_.size()) {
+      if (tracks_.size() == 3) {
+        auto oldest = std::max_element(tracks_.begin(), tracks_.end(),
+            [](const Track &a, const Track &b) {
+              return a.missing_frames < b.missing_frames;
+            });
+        match = static_cast<size_t>(oldest - tracks_.begin());
+        tracks_[match] = {};
+      } else {
+        tracks_.emplace_back();
+        used.push_back(false);
+        match = tracks_.size() - 1;
+      }
+    }
+    used[match] = true;
+    auto &track = tracks_[match];
+    track.missing_frames = 0;
+    track.samples.emplace_back(y, slope);
+    while (track.samples.size() > static_cast<size_t>(history_frames_))
+      track.samples.pop_front();
+    double mean_y = 0, mean_slope = 0;
+    for (const auto &sample : track.samples) {
+      mean_y += sample[0]; mean_slope += sample[1];
+    }
+    mean_y /= track.samples.size();
+    mean_slope /= track.samples.size();
+    RowLine smoothed = row;
+    smoothed.first = {0, cvRound(mean_y - mean_slope * center_x)};
+    smoothed.last = {image_size.width - 1,
+                     cvRound(mean_y + mean_slope * (image_size.width - 1 - center_x))};
+    if (cv::clipLine(frame, smoothed.first, smoothed.last)) output.push_back(std::move(smoothed));
+  }
+  tracks_.erase(std::remove_if(tracks_.begin(), tracks_.end(),
+              [&](const Track &track) {
+                return track.missing_frames > max_missing_frames_;
+              }), tracks_.end());
+  return output;
 }
 
 }  // namespace robot_vision
