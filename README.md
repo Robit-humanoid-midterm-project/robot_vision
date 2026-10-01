@@ -1,3 +1,11 @@
+## 실행 방법 
+
+cd ~/colcon_ws
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select insta360_usb_cam robot_vision
+source ~/colcon_ws/install/setup.bash
+ros2 launch robot_vision obstacle_distance.launch.py
+
 ## 코드 전체 흐름
 
 카메라 영상 -> 빨강, 파랑 색상 마스크 생성 -> 잡음 제거 -> 윤곽선 추출 -> 사각형 조건 검사 -> 거리 계산 -> 토픽 발행(현제 화면에 거리계산값은 나오지 않음. 추출한 윤곽선만 표시)
