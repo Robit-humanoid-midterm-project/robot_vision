@@ -20,6 +20,19 @@ ros2 launch robot_vision obstacle_distance.launch.py
 ros2 launch robot_vision obstacle_distance.launch.py config_file:=$HOME/colcon_ws/src/robot_vision/config/obstacle_distance.yaml
 ```
 
+로봇 PC에서 자동 탐색이 `Expected one Insta360 Link capture node (index 0); found: none`으로 실패하면 카메라 연결 상태와 캡처 노드를 확인합니다.
+
+```bash
+v4l2-ctl --list-devices
+ls -l /dev/video*
+```
+
+확인한 영상 캡처 노드가 예를 들어 `/dev/video2`이면 다음처럼 지정합니다. 번호는 PC마다 다르므로 예시를 그대로 사용하지 마세요. `device:=`는 함께 실행하는 `insta360_usb_cam`에 전달됩니다.
+
+```bash
+ros2 launch robot_vision obstacle_distance.launch.py device:=/dev/video2
+```
+
 카메라 토픽 이름은 `/camera1/camera/compressed_image`지만 실제 메시지 형식은 압축 영상이 아닌 **`sensor_msgs/Image`(BGR8, 640 × 480)**입니다. 이름만 보고 `CompressedImage`로 구독하면 영상이 나오지 않습니다.
 
 ## 파일 구성과 처리 순서
@@ -40,7 +53,7 @@ ros2 launch robot_vision obstacle_distance.launch.py config_file:=$HOME/colcon_w
 처리 흐름은 다음과 같습니다.
 
 1. 빨강은 OpenCV HSV의 `H=0~12`와 `168~179` 두 구간, 파랑은 `H=105~125`를 마스킹합니다. OpenCV의 8비트 HSV 색상각 H는 **0~179**이고, 빨강이 양 끝에 걸쳐 있어 두 구간이 필요합니다. S/V 범위도 [YAML](config/obstacle_distance.yaml)에 있습니다.
-2. 마스크에서 노이즈를 제거한 뒤 색 영역의 외곽과 네 모서리 후보를 찾습니다. 최소 면적, 가장자리 길이, 화면 경계, 사각형과 색 영역의 겹침률(`min_fill_ratio`), 재투영 오차, 거리 범위로 후보를 걸러냅니다.
+2. 마스크에서 노이즈를 제거한 뒤 색 영역의 외곽과 네 모서리 후보를 찾습니다. 최소 면적, 가장자리 길이, 화면 경계, 사각형과 색 영역의 겹침률(`min_fill_ratio`), 재투영 오차, 거리 범위로 후보를 걸러냅니다. 가까워서 최단변이 `near_min_edge_px`(기본 120픽셀) 이상인 면에는 `near_min_fill_ratio`, `near_max_reprojection_error_px`, `near_max_relative_reprojection_error`를 적용합니다. 완전히 화면 안에 있으나 테두리에 가까운 면은 `border_margin_px: 0`으로 허용하고, 화면에 닿아 잘린 면은 여전히 제외합니다.
 3. 빨강·파랑 모두 같은 색의 앞뒤 면이 붙어 보이면 채도 차이로 나누고, 필요하면 보이는 네 변으로 면을 근사합니다. 이 결과는 화면의 `~`와 메시지의 `color_split_estimate=true`로 표시합니다. 네 변이 충분하지 않으면 거리를 내지 않습니다.
 4. **실제 면 크기 0.40 m × 0.40 m**, 검출된 네 모서리 픽셀, 카메라 행렬 `K`와 왜곡 계수 `D`를 OpenCV PnP에 넣습니다.(기존 Insta_360패키지에 있던 보정값을 사용함) 정사각형용 IPPE와 일반 반복 풀이 후보 중 재투영 오차가 작은 유효 해를 선택합니다. 이때 추정한 3D 점은 면 중심이 아니라 **아랫변 중앙**입니다.
 5. 아래 거리값은 `/vision/obstacles`에 발행하고 화면에도 표시합니다. 같은 줄 추정선은 디버그 화면에만 그립니다.

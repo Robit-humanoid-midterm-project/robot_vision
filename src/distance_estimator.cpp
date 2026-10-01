@@ -81,7 +81,14 @@ DistanceEstimator::DistanceEstimator(DetectorConfig config) : config_(std::move(
   if (config_.obstacle_size_m <= 0 || config_.calibration_width <= 0 ||
       config_.calibration_height <= 0 || config_.min_area_px <= 0 ||
       config_.min_edge_px <= 0 || config_.min_fill_ratio <= 0 ||
-      config_.min_fill_ratio > 1 || config_.max_reprojection_error_px <= 0 ||
+      config_.min_fill_ratio > 1 || config_.border_margin_px < 0 ||
+      config_.near_min_edge_px <= config_.min_edge_px ||
+      config_.near_min_fill_ratio <= 0 ||
+      config_.near_min_fill_ratio > config_.min_fill_ratio ||
+      config_.near_max_reprojection_error_px < config_.max_reprojection_error_px ||
+      config_.near_max_relative_reprojection_error <
+          config_.max_relative_reprojection_error ||
+      config_.max_reprojection_error_px <= 0 ||
       config_.max_relative_reprojection_error <= 0 || config_.min_distance_m <= 0 ||
       config_.max_distance_m < config_.min_distance_m) {
     throw std::invalid_argument("Invalid obstacle detector geometry thresholds");
@@ -214,18 +221,26 @@ std::optional<Detection> DistanceEstimator::pose_for_contour(
     const int overlap = cv::countNonZero(intersection);
     const int union_pixels = outline_pixels + cv::countNonZero(region) - overlap;
     const double fit = static_cast<double>(overlap) / std::max(1, union_pixels);
-    if (fit < config_.min_fill_ratio) continue;
     const auto corners = order_quad(candidate);
     double min_edge = std::numeric_limits<double>::infinity();
     for (size_t i = 0; i < 4; ++i) {
       min_edge = std::min(min_edge, cv::norm(corners[i] - corners[(i + 1) % 4]));
     }
     if (min_edge < config_.min_edge_px) continue;
+    const bool near_face = min_edge >= config_.near_min_edge_px;
+    const double min_fill = near_face ? config_.near_min_fill_ratio :
+                                        config_.min_fill_ratio;
+    if (fit < min_fill) continue;
     auto pose = square_pose(corners);
     if (!pose) continue;
-    const double max_error = std::min(config_.max_reprojection_error_px +
+    const double allowed_absolute_error = near_face ?
+        config_.near_max_reprojection_error_px : config_.max_reprojection_error_px;
+    const double allowed_relative_error = near_face ?
+        config_.near_max_relative_reprojection_error :
+        config_.max_relative_reprojection_error;
+    const double max_error = std::min(allowed_absolute_error +
                                           (box_fallback ? 1.0 : 0.0),
-                                      config_.max_relative_reprojection_error * min_edge);
+                                      allowed_relative_error * min_edge);
     if (pose->reprojection_error_px > max_error ||
         pose->distance_m < config_.min_distance_m ||
         pose->distance_m > config_.max_distance_m) continue;

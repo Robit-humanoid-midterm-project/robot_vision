@@ -43,8 +43,12 @@ struct DetectorConfig {
   std::array<int, 3> blue_upper{125, 255, 255};
   double min_area_px{500};
   double min_edge_px{15};
-  int border_margin_px{3};
+  int border_margin_px{0};
   double min_fill_ratio{0.8};
+  double near_min_edge_px{120.0};
+  double near_min_fill_ratio{0.72};
+  double near_max_reprojection_error_px{5.5};
+  double near_max_relative_reprojection_error{0.045};
   double max_reprojection_error_px{3.5};
   double max_relative_reprojection_error{0.03};
   double min_distance_m{0.2};

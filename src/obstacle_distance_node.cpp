@@ -90,6 +90,15 @@ class ObstacleDistanceNode final : public rclcpp::Node {
     config.min_edge_px = declare_parameter<double>("min_edge_px", config.min_edge_px, fixed);
     config.border_margin_px = declare_parameter<int>("border_margin_px", config.border_margin_px, fixed);
     config.min_fill_ratio = declare_parameter<double>("min_fill_ratio", config.min_fill_ratio, fixed);
+    config.near_min_edge_px = declare_parameter<double>(
+        "near_min_edge_px", config.near_min_edge_px, fixed);
+    config.near_min_fill_ratio = declare_parameter<double>(
+        "near_min_fill_ratio", config.near_min_fill_ratio, fixed);
+    config.near_max_reprojection_error_px = declare_parameter<double>(
+        "near_max_reprojection_error_px", config.near_max_reprojection_error_px, fixed);
+    config.near_max_relative_reprojection_error = declare_parameter<double>(
+        "near_max_relative_reprojection_error",
+        config.near_max_relative_reprojection_error, fixed);
     config.max_reprojection_error_px = declare_parameter<double>(
         "max_reprojection_error_px", config.max_reprojection_error_px, fixed);
     config.max_relative_reprojection_error = declare_parameter<double>(

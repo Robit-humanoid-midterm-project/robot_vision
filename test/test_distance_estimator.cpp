@@ -206,6 +206,25 @@ TEST(DistanceEstimatorCpp, DetectsBothColorsAndKnownRange) {
   }
 }
 
+TEST(DistanceEstimatorCpp, DetectsLargeFullyVisibleSquare) {
+  DetectorConfig config;
+  DistanceEstimator estimator(config);
+  for (const cv::Scalar color : {cv::Scalar(0, 0, 255), cv::Scalar(255, 0, 0)}) {
+    cv::Mat image(480, 640, CV_8UC3, cv::Scalar::all(0));
+    const auto corners = projected_square(config, {0, 0, 0.55});
+    for (const auto &corner : corners) {
+      ASSERT_GT(corner.x, 3);
+      ASSERT_LT(corner.x, 636);
+      ASSERT_GT(corner.y, 3);
+      ASSERT_LT(corner.y, 476);
+    }
+    cv::fillConvexPoly(image, corners, color);
+    const auto result = estimator.detect(image);
+    ASSERT_EQ(result.detections.size(), 1u);
+    EXPECT_LT(result.detections[0].distance_m, 0.9);
+  }
+}
+
 TEST(DistanceEstimatorCpp, SeparatesTouchingBlueSquares) {
   DetectorConfig config;
   DistanceEstimator estimator(config);
