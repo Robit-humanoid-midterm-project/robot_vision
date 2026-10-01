@@ -139,6 +139,7 @@ class ObstacleDistanceNode final : public rclcpp::Node {
     output_pub_ = create_publisher<msg::ObstacleArray>("/vision/obstacles", rclcpp::QoS(1));
     lane_pub_ = create_publisher<msg::LaneLine>("/vision/lane_line", rclcpp::QoS(1));
     lane_mask_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/lane_mask", image_qos);
+    slot_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/slot_map", image_qos);
     debug_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/obstacle_debug", image_qos);
     mask_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/obstacle_mask", image_qos);
     preprocess_pub_ = create_publisher<sensor_msgs::msg::Image>(
@@ -172,19 +173,76 @@ class ObstacleDistanceNode final : public rclcpp::Node {
     return array;
   }
 
+  cv::Mat make_slot_view(const DetectResult &result,
+                         const std::vector<RowLine> &rows, const cv::Size &size) const {
+    cv::Mat panel(600, 320, CV_8UC3, cv::Scalar(24, 27, 32));
+    auto text = [&](const std::string &value, int x, int y, double scale = 0.48) {
+      cv::putText(panel, value, {x, y}, cv::FONT_HERSHEY_SIMPLEX, scale,
+                  cv::Scalar(225, 225, 225), 1, cv::LINE_AA);
+    };
+    text("TOP VIEW - PREVIEW", 25, 30, 0.62);
+    text("GOAL / FAR", 100, 64);
+    text("L", 66, 94); text("C", 154, 94); text("R", 242, 94);
+    // Screen thirds and visible-row order are only a visualization heuristic.
+    // Do not publish this as field occupancy. Missing rows must not renumber slots.
+    std::array<int, 9> slots{};
+    if (rows.size() == 3 && size.width > 0) {
+      for (const auto &candidate : result.image_candidates) {
+        const double x = candidate.center.x;
+        const double y = candidate.bounds.br().y - 1;
+        int best = -1;
+        double error = 25.0;
+        for (size_t r = 0; r < rows.size(); ++r) {
+          const auto &row = rows[r];
+          const double dx = row.last.x - row.first.x;
+          if (std::abs(dx) < 1) continue;
+          const double line_y = row.first.y + (x - row.first.x) *
+              (row.last.y - row.first.y) / dx;
+          if (std::abs(y - line_y) < error) {
+            error = std::abs(y - line_y); best = static_cast<int>(r);
+          }
+        }
+        if (best < 0) continue;
+        const int col = std::clamp(static_cast<int>(3 * x / size.width), 0, 2);
+        const int value = candidate.color == "red" ? 1 : 2;
+        auto &slot = slots[best * 3 + col];
+        slot = slot == 0 ? value : 3;  // Multiple regions: ambiguous, never guess.
+      }
+    }
+    for (int r = 0; r < 3; ++r) {
+      for (int c = 0; c < 3; ++c) {
+        const cv::Rect cell(32 + c * 88, 112 + r * 116, 80, 104);
+        cv::rectangle(panel, cell, cv::Scalar(65, 70, 78), cv::FILLED);
+        cv::rectangle(panel, cell, cv::Scalar(140, 145, 150), 1);
+        const int value = slots[r * 3 + c];
+        if (value == 1 || value == 2) {
+          cv::rectangle(panel, {cell.x + 17, cell.y + 28, 46, 46},
+                        value == 1 ? cv::Scalar(45, 60, 235) : cv::Scalar(235, 140, 35), cv::FILLED);
+        } else text("?", cell.x + 29, cell.y + 63, 0.9);
+      }
+      text(std::to_string(3 - r), 9, 174 + r * 116);
+    }
+    text("START / ROBOT", 91, 494);
+    text("Gray / ? = unknown", 28, 527);
+    text("Image-based guess, not field pose", 14, 554, 0.40);
+    text(rows.size() == 3 ? "3 visible rows: provisional layout" :
+         "Need 3 visible rows to place markers", 14, 579, 0.39);
+    return panel;
+  }
+
   void show_dashboard(const cv::Mat &raw, const cv::Mat &white_mask,
                       const cv::Mat &obstacle_mask, const cv::Mat &annotated) {
     if (!viewer_) return;
     if (!window_initialized_) {
       cv::namedWindow(window_name_, cv::WINDOW_NORMAL);
-      cv::resizeWindow(window_name_, 1200, 626);
+      cv::resizeWindow(window_name_, 1520, 626);
       cv::setWindowProperty(window_name_, cv::WND_PROP_FULLSCREEN,
                             viewer_fullscreen_ ? cv::WINDOW_FULLSCREEN : cv::WINDOW_NORMAL);
       window_initialized_ = true;
     }
-    // Keep the annotated image large so distance labels stay readable.
+    // Keep the annotated image large so contours stay readable.
     // The header sits outside the image and does not cover its status banner.
-    cv::Mat dashboard(626, 1200, CV_8UC3, cv::Scalar(18, 18, 18));
+    cv::Mat dashboard(626, 1520, CV_8UC3, cv::Scalar(18, 18, 18));
     cv::Mat large_annotated, small_raw, combined_mask;
     cv::resize(annotated, large_annotated, {800, 600}, 0, 0, cv::INTER_CUBIC);
     cv::resize(raw, small_raw, {400, 300}, 0, 0, cv::INTER_AREA);
@@ -211,13 +269,17 @@ class ObstacleDistanceNode final : public rclcpp::Node {
     cv::rectangle(dashboard, {800, 326}, {990, 352},
                   cv::Scalar(20, 20, 20), cv::FILLED);
     label("RAW CAMERA", 800, 326);
+    const cv::Mat slot_panel = slot_view_.empty() ?
+        make_slot_view(DetectResult{}, {}, {}) : slot_view_;
+    slot_panel.copyTo(dashboard(cv::Rect(1200, 26, 320, 600)));
+    label("3 x 3 LAYOUT", 1200, 0);
     cv::imshow(window_name_, dashboard);
     const int key = cv::waitKey(1) & 0xff;
     if (key == 'f' || key == 'F' || key == 27) {
       viewer_fullscreen_ = key == 27 ? false : !viewer_fullscreen_;
       cv::setWindowProperty(window_name_, cv::WND_PROP_FULLSCREEN,
                             viewer_fullscreen_ ? cv::WINDOW_FULLSCREEN : cv::WINDOW_NORMAL);
-      if (!viewer_fullscreen_) cv::resizeWindow(window_name_, 1200, 626);
+      if (!viewer_fullscreen_) cv::resizeWindow(window_name_, 1520, 626);
     }
   }
 
@@ -291,6 +353,8 @@ class ObstacleDistanceNode final : public rclcpp::Node {
     have_empty_ = true;
     auto array = make_message(get_clock()->now(),
                               have_image_ ? "image_timeout" : "no_image");
+    slot_view_ = make_slot_view(DetectResult{}, {}, {});
+    publish_image(slot_pub_, slot_view_, array.header);
     output_pub_->publish(array);
     lane_pub_->publish(msg::LaneLine().set__header(array.header));
     cv::Mat canvas(480, 640, CV_8UC3, cv::Scalar::all(0));
@@ -386,6 +450,8 @@ class ObstacleDistanceNode final : public rclcpp::Node {
     publish_image(lane_mask_pub_, lane_mask_bgr, image->header);
     const auto row_lines = row_tracker_->smooth(
         estimate_row_lines(result.colors, result.detections, frame.size()), frame.size());
+    slot_view_ = make_slot_view(result, row_lines, frame.size());
+    publish_image(slot_pub_, slot_view_, image->header);
     for (const auto &row : row_lines) {
       const cv::Point2d span = row.last - row.first;
       const double length = cv::norm(span);
@@ -405,7 +471,14 @@ class ObstacleDistanceNode final : public rclcpp::Node {
                  cv::Scalar(0, 255, 0), 3, cv::LINE_AA);
       }
     }
-    bool any_split = false;
+    // Draw observed color contours independently of metric pose acceptance.
+    for (const auto &candidate : result.image_candidates) {
+      const cv::Scalar color = candidate.color == "red" ?
+          cv::Scalar(0, 80, 255) : cv::Scalar(255, 180, 0);
+      const std::vector<std::vector<cv::Point>> contours{candidate.contour};
+      cv::drawContours(canvas, contours, -1, cv::Scalar(0, 0, 0), 4, cv::LINE_AA);
+      cv::drawContours(canvas, contours, -1, color, 2, cv::LINE_AA);
+    }
     for (const auto &detection : result.detections) {
       msg::ObstacleDetection item;
       item.color = detection.color;
@@ -421,56 +494,21 @@ class ObstacleDistanceNode final : public rclcpp::Node {
       }
       item.color_split_estimate = detection.color_split_estimate;
       item.reprojection_error_px = detection.reprojection_error_px;
-      const cv::Scalar color = item.color == "red" ? cv::Scalar(0, 50, 255) : cv::Scalar(255, 160, 0);
-      std::vector<cv::Point> polygon;
       for (size_t i = 0; i < 4; ++i) {
         item.corners[i].x = static_cast<float>(detection.corners[i].x);
         item.corners[i].y = static_cast<float>(detection.corners[i].y);
         item.corners[i].z = 0;
-        polygon.emplace_back(cvRound(detection.corners[i].x), cvRound(detection.corners[i].y));
       }
       array.detections.push_back(item);
-      any_split = any_split || item.color_split_estimate;
-      cv::polylines(canvas, std::vector<std::vector<cv::Point>>{polygon}, true, color, 2);
-      int min_x = canvas.cols, min_y = canvas.rows;
-      for (const auto &point : polygon) {
-        min_x = std::min(min_x, point.x);
-        min_y = std::min(min_y, point.y);
-      }
-      const int x = std::clamp(min_x, 2, std::max(2, canvas.cols - 300));
-      const int y = std::clamp(min_y, 70, std::max(70, canvas.rows - 82));
-      const std::vector<std::string> labels{
-          (item.color == "red" ? "RED" : "BLUE") + std::string("  BOTTOM ") +
-              (item.color_split_estimate ? "~" : "") + two_decimals(item.distance_m) + " m",
-          "X FORWARD " + (item.forward_distance_valid ?
-              two_decimals(item.forward_distance_m) + " m" : "--"),
-          "Y GROUND " + (item.ground_distance_valid ?
-              two_decimals(item.ground_distance_m) + " m" : "--"),
-          "L/R " + signed_two_decimals(item.position.x) + " m"};
-      for (size_t i = 0; i < labels.size(); ++i) {
-        const cv::Point origin{x, y + static_cast<int>(i) * 19};
-        cv::putText(canvas, labels[i], origin, cv::FONT_HERSHEY_SIMPLEX,
-                    0.5, cv::Scalar(0, 0, 0), 3, cv::LINE_AA);
-        cv::putText(canvas, labels[i], origin, cv::FONT_HERSHEY_SIMPLEX,
-                    0.5, color, 1, cv::LINE_AA);
-      }
     }
-    const std::string banner = result.status == "image_size_mismatch" ?
-        "SIZE MISMATCH - NO RANGE" :
-        (!calibration_verified_ ? "ESTIMATE - CALIBRATION NOT VERIFIED" :
-                                  "40 cm face - camera optical coordinates");
     cv::rectangle(canvas, {0, 0}, {canvas.cols, 46}, cv::Scalar(20, 20, 20), cv::FILLED);
-    cv::putText(canvas, banner, {8, 18}, cv::FONT_HERSHEY_SIMPLEX,
+    cv::putText(canvas, "COLOR CONTOURS", {8, 18}, cv::FONT_HERSHEY_SIMPLEX,
                 0.48, cv::Scalar(0, 220, 255), 1, cv::LINE_AA);
-    const std::string note = any_split ? "~ = touching colors, check distance" :
-                                         "BOTTOM = lens to lower edge midpoint";
-    cv::putText(canvas, "Detected: " + std::to_string(result.detections.size()) +
-                " | row lines: " + std::to_string(row_lines.size()) + " | " + note,
+    cv::putText(canvas, "Visible regions: " + std::to_string(result.image_candidates.size()) +
+                " | row lines: " + std::to_string(row_lines.size()),
                 {8, 37}, cv::FONT_HERSHEY_SIMPLEX, 0.39, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
     const std::string lane_note = lane.best.valid ?
-        ("LANE " + lane.best.side + " gap " +
-         std::to_string(cvRound(lane.best.pixel_separation_px)) + " px") :
-        "LANE not detected";
+        ("LANE " + lane.best.side) : "LANE not detected";
     cv::putText(canvas, lane_note + " | GREEN/YELLOW = base/row",
                 {8, 62}, cv::FONT_HERSHEY_SIMPLEX, 0.39, cv::Scalar(0, 0, 0), 3, cv::LINE_AA);
     cv::putText(canvas, lane_note + " | GREEN/YELLOW = base/row",
@@ -489,6 +527,8 @@ class ObstacleDistanceNode final : public rclcpp::Node {
   const std::string preprocess_window_name_ = "Obstacle preprocess - RED / BLUE";
   bool viewer_{false}, show_preprocess_{true}, viewer_fullscreen_{true};
   bool window_initialized_{false}, calibration_verified_{false};
+  cv::Mat slot_view_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr slot_pub_;
   DetectorConfig debug_config_;
   LaneConfig lane_config_;
   double max_processing_fps_{15}, image_timeout_s_{1}, camera_height_m_{0.60};

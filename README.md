@@ -1,135 +1,42 @@
-# robot_vision
+## 코드 전체 흐름
 
-Insta360 영상에서 **보이는 면이 40 × 40 cm인 빨강·파랑 장애물**을 검출하고, 면의 **아랫변 중앙**까지의 거리를 추정하는 ROS 2 Jazzy 패키지입니다. 검출 결과는 ROS 토픽과 디버그 영상으로 내보냅니다. 장애물 밑변의 같은 줄 추정과 흰색 직선 경계 하나의 검출은 현재 시험 단계입니다. 줄 추정은 디버그 화면에만 표시하고, 흰색 경계 결과는 토픽으로도 발행합니다.
+카메라 영상 -> 빨강, 파랑 색상 마스크 생성 -> 잡음 제거 -> 윤곽선 추출 -> 사각형 조건 검사 -> 거리 계산 -> 토픽 발행(현제 화면에 거리계산값은 나오지 않음. 추출한 윤곽선만 표시)
 
-현재 위치값은 **카메라 기준 추정값**입니다.
+현재 윤곽선만 보이게 하였으며 사각형 조건 검사후 거리를 계산해야 장애물이라 가정하겠다. 추후 변경할 예정.
 
-## 실행
+### 1. 색상 영역 찾기 
 
-```bash
-cd ~/colcon_ws
-source /opt/ros/jazzy/setup.bash
-colcon build --packages-up-to robot_vision
-source install/setup.bash
-ros2 launch robot_vision obstacle_distance.launch.py
-```
+color_region_detector.cpp의 detect_color_regions()가 담당한다. 
+영상을 BGR에서 HSV 색상 공간으로 변환한 뒤 기존 설정값으로 빨간색, 파란색 픽셀을 골라 마스크를 만든다. 이후 3x3 커널로 잡음 제거한다. 
 
-기본 설정으로 `insta360_usb_cam`과 거리 측정 노드가 함께 실행됩니다. 카메라가 이미 실행 중이면 `start_camera:=false`, 화면을 띄울 수 없는 환경이면 `viewer:=false`를 붙입니다. 기본 화면은 전체화면이며 검출 결과(왼쪽 크게), OpenCV 흰색·빨강·파랑 마스크(오른쪽 위), 원본 카메라(오른쪽 아래)를 동시에 보여줍니다. `F`로 전체화면과 창 모드를 전환하고 `Esc`로 창 모드로 돌아옵니다. 시작부터 창 모드로 보려면 [설정 파일](config/obstacle_distance.yaml)의 `viewer_fullscreen: false`로 바꿉니다. 기존 빨강·파랑 상세 전처리 창만 끄려면 `show_preprocess: false`를 사용합니다. 설정을 바꾼 뒤에는 다시 빌드하고 노드를 재시작하거나, 아래처럼 소스 설정 파일을 직접 지정합니다.
+### 2. 윤곽선 만들기 
 
-```bash
-ros2 launch robot_vision obstacle_distance.launch.py config_file:=$HOME/colcon_ws/src/robot_vision/config/obstacle_distance.yaml
-```
+전처리한 마스크에 색상 영역의 바깥 윤곽선을 찾는다. 내부 구멍의 윤곽선은 따로 검출하지 않는다. 윤곽선 면적이 기존 min_area_px보다 작으면 제외하고, 나머지는 다음 정보로 저장한다.
 
-로봇 PC에서 자동 탐색이 `Expected one Insta360 Link capture node (index 0); found: none`으로 실패하면 카메라 연결 상태와 캡처 노드를 확인합니다.
+| 저장값 | 의미 |
+|---|---|
+| `color` | 빨강 / 파랑 |
+| `bounds` | 영역을 감싸는 사각형 |
+| `center` | 보이는 영역의 면적 중심 |
+| `area_px` | 윤곽선 면적 |
+| `touches_border` | 화면 가장자리에 닿았는지 |
+| `contour` | 실제 윤곽선 점들 |
 
-```bash
-v4l2-ctl --list-devices
-ls -l /dev/video*
-```
+자료구조는 [distance_estimator.hpp]의 ImageCandidate에 있다.
 
-확인한 영상 캡처 노드가 예를 들어 `/dev/video2`이면 다음처럼 지정합니다. 번호는 PC마다 다르므로 예시를 그대로 사용하지 마세요. `device:=`는 함께 실행하는 `insta360_usb_cam`에 전달됩니다.
+화면에 잘렸거나 정사각형처럼 보이지 않아도 위치 후보는 남는다. 단, 아직은 장애물로 확정된 물체가 아니라 색상 영역 후보다(거리측정 대상 판별이 아니라는 의미이다.).
 
-```bash
-ros2 launch robot_vision obstacle_distance.launch.py device:=/dev/video2
-```
+### 3. 거리 계산 
 
-카메라 토픽 이름은 `/camera1/camera/compressed_image`지만 실제 메시지 형식은 압축 영상이 아닌 **`sensor_msgs/Image`(BGR8, 640 × 480)**입니다. 이름만 보고 `CompressedImage`로 구독하면 영상이 나오지 않습니다.
+distance_estimator.cpp는 색상 검출 결과를 받은 뒤 기존 거리 계산을 수행한다.
 
-## 파일 구성과 처리 순서
+결과가 두 종류로 나뉘어 있다.
+- image_candidates: 색상 영역의 위치 후보
+- detections: 사각형·거리 조건까지 통과한 결과
 
-| 파일 | 역할 |
-| --- | --- |
-| [obstacle_distance.launch.py](launch/obstacle_distance.launch.py) | 카메라와 거리 측정 노드 실행 |
-| [obstacle_distance.yaml](config/obstacle_distance.yaml) | 카메라 내부 파라미터, 실제 장애물 크기, 렌즈 높이, 색 범위와 검출 기준 |
-| [distance_estimator.cpp](src/distance_estimator.cpp), [헤더](include/robot_vision/distance_estimator.hpp) | HSV 마스크 → 사각형 후보 → PnP 자세/거리 → 바닥 거리 계산 |
-| [row_line_estimator.cpp](src/row_line_estimator.cpp), [헤더](include/robot_vision/row_line_estimator.hpp) | 영상에서 보이는 장애물 밑변 추출 및 같은 줄의 연장선 추정 |
-| [lane_line_estimator.cpp](src/lane_line_estimator.cpp), [헤더](include/robot_vision/lane_line_estimator.hpp) | 흰색 일자 경계선 하나의 선택, 좌우 분류와 픽셀 간격 계산 |
-| [obstacle_distance_node.cpp](src/obstacle_distance_node.cpp) | 영상 구독, 결과 메시지·디버그 영상 발행, 화면 표시, 영상 끊김 처리 |
-| [ObstacleDetection.msg](msg/ObstacleDetection.msg), [ObstacleArray.msg](msg/ObstacleArray.msg) | 장애물별 위치·거리와 프레임 상태를 전달하는 ROS 메시지 |
-| [LaneLine.msg](msg/LaneLine.msg) | 선택한 흰색 경계선 하나의 좌우 구분과 픽셀 간격 |
-| [test_distance_estimator.cpp](test/test_distance_estimator.cpp) | 거리 수식, 두 색 검출과 붙어 보이는 면 등 C++ 검사 |
-| [calibrate.launch.py](launch/calibrate.launch.py) | 체커보드 카메라 보정을 별도로 실행 |
+따라서 거리 계산에 실패해도 image_candidates는 사라지지 않아. 입력 해상도가 보정 기준과 달라도 영상 위치 후보는 남고, 거리 계산만 중단해.
 
-처리 흐름은 다음과 같습니다.
+### 4. 화면에 표시  
 
-1. 빨강은 OpenCV HSV의 `H=0~12`와 `168~179` 두 구간, 파랑은 `H=105~125`를 마스킹합니다. OpenCV의 8비트 HSV 색상각 H는 **0~179**이고, 빨강이 양 끝에 걸쳐 있어 두 구간이 필요합니다. S/V 범위도 [YAML](config/obstacle_distance.yaml)에 있습니다.
-2. 마스크에서 노이즈를 제거한 뒤 색 영역의 외곽과 네 모서리 후보를 찾습니다. 최소 면적, 가장자리 길이, 화면 경계, 사각형과 색 영역의 겹침률(`min_fill_ratio`), 재투영 오차, 거리 범위로 후보를 걸러냅니다. 가까워서 최단변이 `near_min_edge_px`(기본 120픽셀) 이상인 면에는 `near_min_fill_ratio`, `near_max_reprojection_error_px`, `near_max_relative_reprojection_error`를 적용합니다. 완전히 화면 안에 있으나 테두리에 가까운 면은 `border_margin_px: 0`으로 허용하고, 화면에 닿아 잘린 면은 여전히 제외합니다.
-3. 빨강·파랑 모두 같은 색의 앞뒤 면이 붙어 보이면 채도 차이로 나누고, 필요하면 보이는 네 변으로 면을 근사합니다. 이 결과는 화면의 `~`와 메시지의 `color_split_estimate=true`로 표시합니다. 네 변이 충분하지 않으면 거리를 내지 않습니다.
-4. **실제 면 크기 0.40 m × 0.40 m**, 검출된 네 모서리 픽셀, 카메라 행렬 `K`와 왜곡 계수 `D`를 OpenCV PnP에 넣습니다.(기존 Insta_360패키지에 있던 보정값을 사용함) 정사각형용 IPPE와 일반 반복 풀이 후보 중 재투영 오차가 작은 유효 해를 선택합니다. 이때 추정한 3D 점은 면 중심이 아니라 **아랫변 중앙**입니다.
-5. 아래 거리값은 `/vision/obstacles`에 발행하고 화면에도 표시합니다. 같은 줄 추정선은 디버그 화면에만 그립니다.
+obstacle_distance_node.cpp에서 image_candidates를 순회하며 윤곽선을 그린다.
 
-## 거리값과 좌표계
-
-장애물 아랫변 중앙의 카메라 광학 좌표를 `P=(x_c, y_c, z_c)` m라고 둡니다. 광학 좌표는 **오른쪽이 +x, 아래쪽이 +y, 카메라 앞쪽이 +z**입니다. `P`는 [ObstacleDetection.msg](msg/ObstacleDetection.msg)의 `position`이며 `/vision/obstacles`의 `header.frame_id`는 기본적으로 `camera1_optical_frame`입니다. 로봇 몸체나 필드 좌표계로 변환하는 TF는 현재 없습니다.
-
-화면 표시는 다음과 같이 계산합니다. `h`는 [YAML](config/obstacle_distance.yaml)의 `camera_height_m`이며 기본 0.60 m입니다.
-
-| 화면 표시 | ROS 필드 | 뜻과 계산 |
-| --- | --- | --- |
-| `BOTTOM` | `distance_m` | 렌즈 중심에서 장애물 아랫변 중앙까지의 3D 직선거리 `D = ‖P‖` |
-| `L/R` | `position.x` | 렌즈 기준 좌우 성분 `x_c`; 오른쪽이 양수 |
-| `Y GROUND` | `ground_distance_m` | 렌즈 바로 아래 바닥점부터 장애물 아랫변 중앙까지의 **바닥 위 직선거리** `G = √(D² − h²)` |
-| `X FORWARD` | `forward_distance_m` | 위 바닥 거리에서 카메라가 향한 **앞쪽 성분** `F = √(G² − x_c²)` |
-
-좌우 성분은 영상에서 중심이 얼마나 벗어났는지와 거리 추정값으로 구합니다. 왜곡을 무시한 단순한 관계는 `x_c ≈ (u − c_x) × z_c / f_x`입니다. 현재 코드에서는 이 식만으로 끝내지 않고 네 모서리와 `K/D`를 사용한 **PnP 결과의 x 좌표**를 씁니다. 영상 한 픽셀을 고정 길이로 바꾸는 방식이 아닙니다.
-
-예를 들어 `BOTTOM=1.50 m`, `L/R=+0.30 m`, `h=0.60 m`라면 `Y GROUND≈1.37 m`, `X FORWARD≈1.34 m`입니다. **화면의 X/Y는 필드 지도상의 절대 좌표가 아닙니다.** 특히 `Y GROUND`는 좌우와 앞쪽을 합친 바닥 위 거리이며 ROS `position.y`(광학 좌표의 아래쪽)와 다릅니다. `D<h` 또는 `G<|x_c|`이면 바닥 투영이 성립하지 않아 두 바닥 거리의 유효 플래그가 `false`가 되고 화면에 `--`를 표시합니다.
-
-이 계산은 장애물 아랫변 중앙이 바닥에 닿고, 렌즈 아래 바닥과 장애물 바닥이 같은 높이라는 가정에 의존합니다. 앞쪽 성분을 주행 방향 거리로 쓰려면 카메라의 좌우 기울기와 방향도 확인해야 합니다. 현재 설정 높이는 `camera_height_m=0.60`입니다. 높이를 바꾸면 `Y GROUND`와 `X FORWARD`도 달라지므로 실제 장착 상태와 일치시켜야 합니다.
-
-## ROS 출력과 디버깅
-
-| 토픽 | 내용 |
-| --- | --- |
-| `/vision/obstacles` | `robot_vision/msg/ObstacleArray`: 영상 시각, 보정 확인 상태, 장애물별 색·위치·거리·모서리·재투영 오차. 검출이 없으면 빈 `detections` 배열 |
-| `/vision/obstacle_debug` | 장애물 사각형·거리, 밑변 연장선, 선택한 흰색 경계선을 그린 BGR 영상 |
-| `/vision/lane_line` | 선택한 직선 경계 하나의 유효 여부, 좌우, 픽셀 좌표·간격 (`robot_vision/msg/LaneLine`) |
-| `/vision/lane_mask` | 흰색 후보 마스크를 BGR 영상으로 발행 |
-| `/vision/obstacle_mask` | 빨강·파랑으로 분리된 색 마스크 |
-| `/vision/obstacle_preprocess` | 각 색의 HSV 직후 `RAW`와 노이즈 제거 후 `CLEAN` 마스크 및 검출 통계 |
-
-전체화면의 왼쪽 큰 `ANNOTATED RESULT`에는 위 거리와 색을 표시합니다. 초록 실선은 실제 영상에서 추출한 장애물 밑변이고, 노란 점선은 영상 높이와 기울기가 비슷한 밑변을 한 줄로 묶어 화면 폭으로 연장한 **추정선**입니다. 일부만 보이는 밑변도 후보가 되지만 완전히 가려지면 복원할 수 없습니다. 색상과 좌우 위치에 관계없이 밑변 근거가 강한 줄을 **최대 3개**만 표시합니다. 같은 줄로 이어지는 최근 5프레임의 높이와 기울기를 평균내 흔들림을 줄입니다. 현재 프레임에서 보이지 않는 줄은 표시하지 않으며, 로봇이 빠르게 움직일 때는 평균 때문에 표시가 약간 늦을 수 있습니다. `row_smoothing_frames`, `row_match_y_px`, `row_match_slope`, `row_track_max_missing_frames`는 설정 파일에서 조정할 수 있습니다. 이 기능은 **현재 디버그 영상에만 표시**되며 장애물 줄 번호나 주행용 좌표를 메시지로 발행하지 않습니다.
-
-별도로 열리는 `Obstacle preprocess - RED / BLUE` 상세 창에서는 다음 순서로 확인합니다. 전체화면의 오른쪽 위 `OPENCV MASK`는 흰 선 후보를 흰색, 장애물 후보를 빨강·파랑으로 합쳐 보여줍니다.
-
-- `RAW`에서 물체가 검으면 해당 색 HSV 범위를 확인합니다.
-- `RAW`에는 있는데 `CLEAN`에서 사라지면 노이즈 제거 또는 색 영역 분리 단계를 확인합니다.
-- `CLEAN`에는 있는데 검출 수가 0이면 면적·사각형 적합도(`fit`)·재투영 오차(`reproj`)와 화면 경계 조건을 확인합니다.
-- 색 영역은 맞지만 서로 붙은 면이라면 `~` 표시와 `color_split_estimate`를 확인하고 실측 거리와 비교합니다.
-
-영상이 설정된 `image_timeout_s`(기본 1초) 이상 끊기면 `/vision/obstacles`에 `status=image_timeout`과 빈 목록을 발행하고 표시 영상을 지웁니다. `calibration_verified=false`인 동안에는 결과에 미검증 상태가 표시됩니다.
-
-## 흰색 일자 경계선 하나
-
-현재 단계는 **필드 경계 하나를 안정적으로 고르는 것**입니다. [설정 파일](config/obstacle_distance.yaml)의 흰색 HSV 범위로 후보를 만들고, 빨강·파랑 장애물 영역을 제외합니다. 각 선분의 아래쪽 끝점이 영상 높이의 70% 지점보다 아래에 있는 경우만 후보로 삼습니다(`lane_candidate_min_bottom_y_fraction: 0.70`). 위쪽 사물함 대각선을 배제하려는 설정이며, 바닥의 실제 선이 위쪽에만 보이면 검출하지 못할 수 있습니다. 흰색 마스크 자체는 이 높이 조건과 별개로 표시됩니다. 후보 선분의 각도를 제한해 영상 아래로 갈수록 왼쪽으로 벌어지면 왼쪽 경계, 오른쪽으로 벌어지면 오른쪽 경계로 분류합니다. 선 바로 안쪽에 잔디 색이 보이는지, 여러 높이에 있는 선분이 실제로 같은 직선 위에 놓이는지, 관측 구간 길이와 직선 맞춤 오차를 확인합니다. 통과한 후보 중 점수가 가장 높은 **한 선만** 선택합니다. 충분한 근거가 없으면 `valid=false`입니다. 짧은 반원 조각이나 흰 배경을 억지로 연장하지 않습니다.
-
-`/vision/obstacle_debug`에는 흰색 경계선 후보 중 선택된 한 선을 청록(왼쪽) 또는 자홍(오른쪽)으로 표시합니다. 굵은 부분은 영상에서 보인 선분, 점선은 같은 직선의 연장입니다. `/vision/lane_mask`는 흰색 후보 마스크입니다. `/vision/lane_line`의 [LaneLine.msg](msg/LaneLine.msg)는 `side`, `valid`, 관측 범위, 직선 맞춤 오차, 잔디 지지율과 픽셀 좌표를 발행합니다.
-
-픽셀 간격은 이미지 높이의 `lane_reference_y_fraction`(기본 0.85)에 해당하는 **고정 가로줄**에서 측정합니다. `line_x_at_reference_px`는 그 줄에서 경계선의 x픽셀, `pixel_separation_px`는 그 점과 영상 중심 사이의 가로 간격입니다. 이 수치는 아직 **cm나 필드 절대 x좌표가 아닙니다.** 카메라 팬·틸트와 장착 자세를 고정한 뒤, 실제로 선에서 여러 거리만큼 떨어져 촬영한 값으로 픽셀→cm 대응을 구할 예정입니다. 현재는 흰색 경계의 센티미터 거리나 필드 x좌표를 발행하지 않습니다. 왼쪽 선이면 왼쪽 필드 경계로부터의 거리, 오른쪽 선이면 오른쪽 경계로부터의 거리를 기준으로 해석합니다.
-
-각도 범위, 잔디 색, 관측 길이, 기준 높이는 YAML에서 조절합니다. 주변 흰 배경이나 반원이 통과하면 조건을 더 엄격하게 하고, 실제 선을 놓치면 `/vision/lane_mask`와 디버그 화면에서 어느 단계가 원인인지 확인합니다.
-
-## 정확도와 보정
-
-현재 [설정 파일](config/obstacle_distance.yaml)의 `K/D`는 Insta360 드라이버에 있던 값입니다. **실제 640 × 480 발행 영상에 맞는지는 검증되지 않았으므로** `calibration_verified: false`가 기본값입니다. 거리 노드는 드라이버의 CameraInfo를 그대로 쓰지 않고 YAML의 `K/D`를 읽습니다. 영상 해상도가 설정과 다르면 수치 출력을 중단합니다. `fit`이나 `reproj`가 좋아도 카메라 값이나 실제 면 크기가 틀리면 미터 거리도 틀립니다.
-
-정면 1 m, 1.5 m, 2 m에서 렌즈 부근부터 **장애물 아랫변 중앙**까지 실측한 값과 `BOTTOM`을 비교하고, 좌우 및 비스듬한 위치에서도 확인합니다. `Y GROUND`와 `X FORWARD`는 렌즈 높이와 바닥 조건도 함께 확인해야 합니다. 화면 밖으로 잘린 면, 가려진 모서리, 실제 40 cm와 다른 물체, 같은 색 배경은 오검출 또는 거리 오차가 날 수 있습니다.
-
-체커보드로 내부 파라미터를 다시 구하려면 가로·세로 **내부 교차점 수**와 실제 한 칸 길이를 사용합니다. 사용한 판이 내부 교차점 8 × 6개이고 한 칸이 **3 cm**인 경우의 실행 예시는 다음과 같습니다. 교차점 수는 실제 판에서 세어 확인하세요.
-
-```bash
-ros2 launch robot_vision calibrate.launch.py board_size:=8x6 square_size:=0.03
-```
-
-카메라가 이미 실행 중이면 `start_camera:=false`를 붙입니다. 체커보드 전체를 중앙과 화면 각 모서리, 여러 거리와 기울기에서 촬영하고 공식 도구의 X/Y/Size/Skew 수집 상태를 확인한 뒤 `CALIBRATE` → `SAVE`합니다. 저장된 결과와 실제 영상 크기를 확인하고 YAML의 `K/D`에 반영해야 합니다. 드라이버는 `set_camera_info` 서비스를 제공하지 않아 보정 도구의 `COMMIT` 자동 적용은 지원하지 않습니다. 초점·줌·크롭·해상도를 바꾸면 다시 검증해야 합니다.
-
-검사 명령:
-
-```bash
-cd ~/colcon_ws
-source /opt/ros/jazzy/setup.bash
-colcon test --packages-select robot_vision
-colcon test-result --verbose
-```
-
-참고: [OpenCV PnP 문서](https://docs.opencv.org/4.x/d5/d1f/calib3d_solvePnP.html), [ROS camera_calibration 도구](https://index.ros.org/p/camera_calibration/).

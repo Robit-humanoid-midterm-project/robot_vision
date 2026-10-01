@@ -28,10 +28,6 @@ std::array<cv::Point2d, 4> order_quad(std::array<cv::Point2d, 4> points) {
   return points;
 }
 
-cv::Scalar hsv_scalar(const std::array<int, 3> &value) {
-  return cv::Scalar(value[0], value[1], value[2]);
-}
-
 void validate_hsv(const std::array<int, 3> &lower, const std::array<int, 3> &upper) {
   for (int i = 0; i < 3; ++i) {
     const int maximum = i == 0 ? 179 : 255;
@@ -416,35 +412,23 @@ DetectResult DistanceEstimator::detect(const cv::Mat &bgr) const {
     result.status = "no_image";
     return result;
   }
-  result.mask_preview = cv::Mat::zeros(bgr.size(), CV_8UC3);
+  auto color_result = detect_color_regions(bgr, config_);
+  result.colors = std::move(color_result.colors);
+  result.mask_preview = std::move(color_result.mask_preview);
+  result.image_candidates = std::move(color_result.candidates);
   if (bgr.cols != config_.calibration_width || bgr.rows != config_.calibration_height) {
     result.status = "image_size_mismatch";
-    return result;
+    return result;  // Image positions remain available; only metric pose is unavailable.
   }
-  if (bgr.type() != CV_8UC3) throw std::invalid_argument("Expected BGR8 image");
   cv::Mat hsv;
   cv::cvtColor(bgr, hsv, cv::COLOR_BGR2HSV);
-  cv::Mat red1, red2, red, blue;
-  cv::inRange(hsv, hsv_scalar(config_.red_lower_1), hsv_scalar(config_.red_upper_1), red1);
-  cv::inRange(hsv, hsv_scalar(config_.red_lower_2), hsv_scalar(config_.red_upper_2), red2);
-  cv::bitwise_or(red1, red2, red);
-  cv::inRange(hsv, hsv_scalar(config_.blue_lower), hsv_scalar(config_.blue_upper), blue);
-  const cv::Mat kernel = cv::Mat::ones(3, 3, CV_8UC1);
   int color_index = 0;
-  for (auto &entry : std::vector<std::pair<std::string, cv::Mat>>{{"red", red}, {"blue", blue}}) {
+  for (auto &entry : std::vector<std::pair<std::string, cv::Mat>>{
+         {"red", result.colors[0].cleaned_mask}, {"blue", result.colors[1].cleaned_mask}}) {
     auto &debug = result.colors[color_index++];
     cv::Mat &mask = entry.second;
-    debug.raw_mask = mask.clone();
-    debug.raw_pixels = cv::countNonZero(mask);
-    cv::morphologyEx(mask, mask, cv::MORPH_OPEN, kernel);
-    cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, kernel);
-    debug.cleaned_mask = mask.clone();
-    debug.cleaned_pixels = cv::countNonZero(mask);
-    result.mask_preview.setTo(entry.first == "red" ? cv::Scalar(0, 0, 255) :
-                                                     cv::Scalar(255, 0, 0), mask);
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-    debug.candidate_contours = static_cast<int>(contours.size());
     for (const auto &contour : contours) {
       auto pose = pose_for_contour(contour, mask, bgr.size(), false);
       if (pose) {

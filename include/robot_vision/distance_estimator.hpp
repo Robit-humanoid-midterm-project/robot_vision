@@ -64,7 +64,26 @@ struct ColorDebug {
   int detections{0};
 };
 
+// Visible color component, not necessarily one complete physical obstacle.
+struct ImageCandidate {
+  std::string color;
+  cv::Rect bounds;
+  cv::Point2d center;
+  double area_px{0};
+  bool touches_border{false};
+  std::vector<cv::Point> contour;
+};
+
+struct ColorResult {
+  std::array<ColorDebug, 2> colors;
+  cv::Mat mask_preview;
+  std::vector<ImageCandidate> candidates;
+};
+
+ColorResult detect_color_regions(const cv::Mat &bgr, const DetectorConfig &config);
+
 struct DetectResult {
+  std::vector<ImageCandidate> image_candidates;
   std::vector<Detection> detections;
   cv::Mat mask_preview;
   std::array<ColorDebug, 2> colors;  // red, blue

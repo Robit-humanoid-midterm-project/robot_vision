@@ -1,60 +1,109 @@
+# 비전 노드 설정: 값을 바꾸면 노드를 재시작해야 적용됩니다.
+# 색상 전처리의 3×3 커널과 OPEN → CLOSE 순서는 현재 color_region_detector.cpp에 고정되어 있습니다.
+# 현재 화면은 색상 윤곽선을 표시하며 거리 숫자는 숨깁니다. 거리 계산과 기존 토픽은 유지됩니다.
+# 줄 추정은 영상상의 장애물 밑변 묶음이며 절대 구간 1·2·3 판별이 아닙니다.
+# 선 탐색은 현재 가장 좋은 한쪽 선만 선택합니다. 양쪽 경계·미터 거리·방향각은 아직 별도 구현 필요.
 obstacle_distance:
   ros__parameters:
+    # 입력 영상 토픽. 이름에 compressed가 있지만 현재 타입은 sensor_msgs/Image(BGR 영상).
     image_topic: /camera1/camera/compressed_image
+    # 장애물 거리 메시지의 좌표계 이름. 카메라 광학 좌표: x 오른쪽, y 아래쪽, z 전방.
     optical_frame_id: camera1_optical_frame
+    # 거리 추정에 사용하는 정사각형 판의 한 변 길이(m). 색상 윤곽선 검출에는 사용하지 않음.
     obstacle_size_m: 0.40
-    # Lens center height above the same level floor as the obstacle base.
+    # 바닥부터 렌즈 중심까지 높이(m). 판의 밑변이 같은 평평한 바닥에 닿는다는 가정으로 바닥 거리를 계산.
     camera_height_m: 0.60
-    # Initial assumption only: these legacy K/D values belong to 640x480.
-    # Verify against measured range before using for robot control.
+    # 실측 거리로 보정값을 검증했는지 표시. false여도 추정은 수행하며 상태를 unverified_calibration으로 발행.
     calibration_verified: false
+    # 기존 보정값에 대응한다고 가정한 영상 가로 크기(px). 실제 영상 크기가 다르면 거리 추정만 중단.
     calibration_width: 640
+    # 보정 기준 영상 세로 크기(px). 현재 640×480 기준이며 색상 위치 후보는 다른 해상도에서도 검출.
     calibration_height: 480
+    # 카메라 내부 행렬 K, 행 순서 [fx,0,cx, 0,fy,cy, 0,0,1]. 초점거리·주점은 픽셀 단위. 임의 튜닝 금지.
     camera_matrix: [471.953641, 0.0, 309.509126, 0.0, 476.574144, 228.222101, 0.0, 0.0, 1.0]
+    # 렌즈 왜곡 계수 [k1,k2,p1,p2,k3]. 기존 캘리브레이션 결과이며 색상 임계값과 별개.
     distortion_coefficients: [0.026101, -0.086354, -0.007248, -0.006668, 0.0]
+    # 빨강 첫 범위 하한 [H,S,V]. OpenCV H=0~179, S/V=0~255. S/V 하한을 높이면 흐리거나 어두운 색을 더 제외.
     red_lower_1: [0, 100, 60]
+    # 빨강 첫 범위 상한 [H,S,V]. 각 성분이 하한~상한 안인 픽셀을 선택.
     red_upper_1: [12, 255, 255]
+    # 빨강 두 번째 범위 하한 [H,S,V]. 빨강은 H 범위 양 끝에 있어 두 마스크를 합침.
     red_lower_2: [168, 100, 60]
+    # 빨강 두 번째 범위 상한 [H,S,V]. H 상한은 OpenCV 기준 최대 179.
     red_upper_2: [179, 255, 255]
+    # 파랑 범위 하한 [H,S,V]. S 하한을 낮추면 옅은 파랑도 잡지만 배경 잡음이 늘 수 있음.
     blue_lower: [105, 170, 45]
+    # 파랑 범위 상한 [H,S,V]. H 범위를 넓히면 인접한 색도 포함될 수 있음.
     blue_upper: [125, 255, 255]
+    # 색상 윤곽선 최소 면적(px²). 위치 후보와 거리 후보에 사용. 높이면 작은 잡음뿐 아니라 먼/가려진 장애물도 제외.
     min_area_px: 500.0
+    # 거리 추정용 사각형의 최소 변 길이(px). 아래 사각형 조건들은 색상 윤곽선 표시의 통과 조건이 아님.
     min_edge_px: 15.0
+    # 거리 후보의 화면 가장자리 제외 여유(px). 0이어도 경계에 닿거나 잘린 후보는 거리 추정에서 제외.
     border_margin_px: 0
-    # Minimum overlap of a fitted quadrilateral and the color mask (IoU).
+    # 거리 후보 윤곽선 내부와 맞춘 사각형의 겹침 비율(IoU, 0~1) 하한. 높일수록 사각형 형태에 엄격.
     min_fill_ratio: 0.80
-    # Relax fit only when the shortest visible side is at least 120 pixels.
+    # 맞춘 사각형의 가장 짧은 변이 이 길이(px) 이상이면 근접용 완화 조건 적용. 실제 거리 임계값은 아님.
     near_min_edge_px: 120.0
+    # 근접용 사각형 겹침 비율 하한(0~1). 낮추면 불완전한 모양도 허용하지만 잘못된 거리 위험 증가.
     near_min_fill_ratio: 0.72
+    # 근접용 재투영 오차 상한(px). 3D 사각형을 영상에 다시 투영했을 때 모서리 RMS 오차.
     near_max_reprojection_error_px: 5.5
+    # 근접용 상대 오차 상한(비율). 가장 짧은 변 길이에 곱해 픽셀 상한으로 사용.
     near_max_relative_reprojection_error: 0.045
+    # 일반 재투영 오차 상한(px). 상대 상한과 비교해 더 작은 값을 사용. 일부 복구 경로는 추가 완화 적용.
     max_reprojection_error_px: 3.5
+    # 일반 상대 오차 상한. 예: 0.03이면 가장 짧은 변 길이의 3%. 낮추면 거리 후보를 더 엄격히 거름.
     max_relative_reprojection_error: 0.03
+    # 거리 결과 허용 최솟값(m). 렌즈 중심에서 판 밑변 중심까지의 3D 직선 거리 기준.
     min_distance_m: 0.2
+    # 거리 결과 허용 최댓값(m). 범위 밖이어도 색상 위치 후보는 유지.
     max_distance_m: 10.0
+    # 비전 처리 최대 빈도(초당 프레임). 초과 입력은 건너뜀. 카메라 촬영 FPS와 별개.
     max_processing_fps: 15.0
+    # 처리된 영상 갱신이 이 시간(초) 넘게 없으면 image_timeout 발행. 개별 프레임 손실 판정과는 다름.
     image_timeout_s: 1.0
-    # At most 3 obstacle rows; average matching lines from recent frames.
+    # 장애물 밑변으로 추정한 같은 줄의 최근 관측 평균 개수(1~30). 높이면 부드럽지만 이동 반응이 늦어짐.
     row_smoothing_frames: 5
+    # 이전 줄과 연결할 영상 중앙에서의 y 차이 한계(px). 높이면 빠른 이동을 허용하지만 다른 줄과 혼동 가능.
     row_match_y_px: 35.0
+    # 같은 줄로 연결할 기울기(dy/dx) 차이 한계. rad나 도 단위가 아님.
     row_match_slope: 0.18
+    # 관측 누락 시 줄의 내부 기록을 보관할 처리 프레임 수(0~30). 누락된 줄 자체를 화면에 계속 그리지는 않음.
     row_track_max_missing_frames: 3
+    # 결과 대시보드 표시 여부. 그래픽 환경이 없으면 표시 안 함. false여도 결과 토픽은 발행.
     viewer: true
+    # 결과 화면을 전체 화면으로 시작할지 여부. F로 전환, Esc로 전체 화면 해제.
     viewer_fullscreen: true
-    show_preprocess: true
-    # Single white straight boundary; pixel distance only until field calibration.
+    # viewer가 켜져 있을 때 별도 색상 전처리 창 표시. 전처리 영상 토픽은 이 값과 무관하게 발행.
+    show_preprocess: false
+    # 흰 선 후보의 HSV 채도 S 상한(0~255). 낮추면 무채색만 허용.
     lane_white_max_saturation: 85
+    # 흰 선 후보의 HSV 밝기 V 하한(0~255). 높이면 밝은 선만 허용하며 그림자 속 선을 놓칠 수 있음.
     lane_white_min_value: 175
+    # 선 안쪽 바닥을 녹색으로 판단할 H 하한(0~179). 실제 바닥 색에 맞춰 사용.
     lane_grass_hue_min: 30
+    # 녹색 바닥 H 상한(0~179). 위 하한과 함께 녹색 범위를 지정.
     lane_grass_hue_max: 95
+    # 녹색 바닥의 S 하한(0~255). 코드에서는 V>=30도 추가 적용.
     lane_grass_min_saturation: 45
+    # 영상 위쪽에서 선 탐색을 제외할 높이 비율(0~1 미만). 0.18이면 위 18% 제외.
     lane_roi_top_fraction: 0.18
+    # 선의 x 위치와 화면 중앙 간 픽셀 간격을 구할 높이 비율. 0.85이면 화면 위에서 약 85% 지점.
     lane_reference_y_fraction: 0.85
+    # 후보 선분의 아래 끝이 도달해야 할 최소 높이 비율. 0.70이면 위에서 70% 지점 이상 내려와야 함.
     lane_candidate_min_bottom_y_fraction: 0.70
+    # 선 후보 |dx/dy| 최솟값. 0에 가까울수록 영상에서 수직인 선. 높이면 수직에 가까운 선을 제외.
     lane_min_abs_dx_per_dy: 0.35
+    # 선 후보 |dx/dy| 최댓값. 높이면 더 눕혀진 선도 허용. 실제 로봇 방향각이 아님.
     lane_max_abs_dx_per_dy: 2.3
+    # 같은 직선으로 묶인 관측의 최소 세로 범위/영상 높이. 높이면 짧은 조각을 더 제외.
     lane_min_observed_height_fraction: 0.18
+    # 직선에 맞춘 점들의 가로 방향 RMS 오차 상한(px). 낮추면 곡선·흔들림에 더 엄격.
     lane_max_fit_error_px: 8.0
+    # 선분을 같은 선으로 묶을 때 기준 높이에서 x 차이 허용값(px). 높이면 다른 선이 합쳐질 수 있음.
     lane_group_tolerance_px: 18.0
+    # 선 안쪽 샘플 중 녹색 바닥이어야 하는 최소 비율(0~1). 높이면 배경 오검출 감소, 실제 선 누락 증가 가능.
     lane_min_grass_support: 0.60
+    # 영상 맨 아래로 연장한 선이 있어야 할 바깥쪽 영역 비율(0~0.5 미만). 0.35면 왼쪽 35%/오른쪽 35% 영역.
     lane_bottom_outer_fraction: 0.35

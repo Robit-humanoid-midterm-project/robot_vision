@@ -301,3 +301,26 @@ TEST(DistanceEstimatorCpp, NearRedReferenceScreenshotWhenAvailable) {
 }
 
 }  // namespace
+
+TEST(ColorRegions, KeepsBorderClippedAndNonSquareRegionsWithoutMetricPose) {
+  cv::Mat image(480, 640, CV_8UC3, cv::Scalar::all(0));
+  cv::rectangle(image, {0, 100}, {70, 200}, cv::Scalar(0, 0, 255), cv::FILLED);
+  cv::fillConvexPoly(image, std::vector<cv::Point>{{300, 100}, {400, 200}, {300, 200}},
+                    cv::Scalar(255, 0, 0));
+  const auto result = robot_vision::DistanceEstimator(robot_vision::DetectorConfig{}).detect(image);
+  EXPECT_EQ(result.image_candidates.size(), 2u);
+  EXPECT_TRUE(result.detections.empty());
+  EXPECT_TRUE(result.image_candidates[0].touches_border);
+}
+
+TEST(ColorRegions, RetainsImagePositionsAtDifferentResolutionAndRejectsNoise) {
+  cv::Mat image(720, 1280, CV_8UC3, cv::Scalar::all(0));
+  cv::rectangle(image, {500, 200}, {600, 300}, cv::Scalar(0, 0, 255), cv::FILLED);
+  cv::rectangle(image, {20, 20}, {25, 25}, cv::Scalar(255, 0, 0), cv::FILLED);
+  const auto result = robot_vision::DistanceEstimator(robot_vision::DetectorConfig{}).detect(image);
+  ASSERT_EQ(result.image_candidates.size(), 1u);
+  EXPECT_NEAR(result.image_candidates[0].center.x, 550, 1);
+  EXPECT_NEAR(result.image_candidates[0].center.y, 250, 1);
+  EXPECT_EQ(result.status, "image_size_mismatch");
+  EXPECT_TRUE(result.detections.empty());
+}
