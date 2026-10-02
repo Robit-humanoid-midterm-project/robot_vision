@@ -99,3 +99,12 @@ v4l2-ctl -d /dev/video0 --set-ctrl=tilt_absolute=40000
 
 source /home/doyeon/colcon_ws/install/setup.bash
 ros2 topic echo /vision2master --field obstacle_1
+
+## 화면에 뜨는 값은 위에서 순서대로 다음과 같다. 
+
+| 화면 항목 | 의미 |
+|---|---|
+| **Range** | 카메라 → 판 아래쪽 중심의 직선거리 |
+| **Ground** | 카메라 바로 아래 바닥 지점 → 판까지의 바닥거리 |
+| **Forward** | 바닥거리 중 전방 방향 성분 |
+| **Lateral** | 좌우 편차: 왼쪽 `−`, 오른쪽 `+` |

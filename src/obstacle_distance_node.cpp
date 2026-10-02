@@ -242,7 +242,7 @@ class ObstacleDistanceNode final : public rclcpp::Node
     // {
     //     master_pub_->publish(message);
     // }
-    // 임시 테스트 규약: obstacle_1[0]에 가장 가까운 판의 Range(m)를 보낸다.
+    // 임시 테스트 규약: 가장 가까운 판의 Range와 Lateral을 obstacle_1에 보낸다.
     // 원래 y/x 상대거리 규약과 다르며, 미측정 필드는 모두 -1000으로 표시한다.
     void publish_master_test(const msg::ObstacleArray &array, bool frame_drop)
     {
@@ -260,17 +260,23 @@ class ObstacleDistanceNode final : public rclcpp::Node
         message.obstacle_2.fill(-1000.0);
         message.obstacle_3.fill(-1000.0);
         message.confidence = -1000.0;
-        double closest = std::numeric_limits<double>::infinity();
+        const msg::ObstacleDetection *closest = nullptr;
         if (!frame_drop)
         {
             for (const auto &obstacle : array.detections)
             {
-                if (std::isfinite(obstacle.distance_m) && obstacle.distance_m > 0)
-                    closest = std::min(closest, obstacle.distance_m);
+                if (!std::isfinite(obstacle.distance_m) || obstacle.distance_m <= 0 ||
+                    !std::isfinite(obstacle.position.x))
+                    continue;
+                if (!closest || obstacle.distance_m < closest->distance_m)
+                    closest = &obstacle;
             }
         }
-        if (std::isfinite(closest))
-            message.obstacle_1[0] = closest;
+        if (closest)
+        {
+            message.obstacle_1[0] = closest->distance_m;  // Range: 카메라와 판 사이 직선거리(m)
+            message.obstacle_1[1] = closest->position.x;   // Lateral: 왼쪽 음수, 오른쪽 양수(m)
+        }
         master_pub_->publish(message);
     }
 
