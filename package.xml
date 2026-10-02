@@ -15,6 +15,7 @@
   <depend>geometry_msgs</depend>
   <exec_depend>rosidl_default_runtime</exec_depend>
   <depend>rclcpp</depend>
+  <depend>humanoid_interfaces</depend>
   
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>

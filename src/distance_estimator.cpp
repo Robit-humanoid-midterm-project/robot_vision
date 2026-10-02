@@ -43,6 +43,103 @@ bool finite_vec(const cv::Vec3d &value) {
 
 }  // namespace
 
+// 한 변 기반 거리 추정: 선언은 distance_estimator.hpp에서 관리한다.
+namespace {
+
+bool colored(const cv::Mat &mask, int x, int y) {
+  return x >= 0 && y >= 0 && x < mask.cols && y < mask.rows &&
+         mask.at<uchar>(y, x) != 0;
+}
+
+}  // namespace
+
+std::vector<VisibleEdge> find_complete_visible_edges(
+    const std::vector<cv::Point> &contour, const cv::Mat &mask,
+    double min_edge_px, int border_margin_px) {
+  std::vector<VisibleEdge> edges;
+  if (contour.size() < 4 || mask.empty()) return edges;
+  const auto bounds = cv::boundingRect(contour);
+  if (bounds.x <= border_margin_px || bounds.y <= border_margin_px ||
+      bounds.br().x >= mask.cols - border_margin_px ||
+      bounds.br().y >= mask.rows - border_margin_px) return edges;
+  std::vector<cv::Point> polygon;
+  // 작은 색상 잡음을 정리하되, 겹친 판 사이의 오목한 꺾임은 보존한다.
+  cv::approxPolyDP(contour, polygon, 2.0, true);
+  if (polygon.size() < 4) return edges;
+  const double orientation = cv::contourArea(polygon, true) > 0 ? 1.0 : -1.0;
+  for (size_t i = 0; i < polygon.size(); ++i) {
+    const cv::Point2d a = polygon[i], b = polygon[(i + 1) % polygon.size()];
+    const cv::Point2d before = a - cv::Point2d(polygon[(i + polygon.size() - 1) % polygon.size()]);
+    const cv::Point2d edge = b - a;
+    const cv::Point2d after = cv::Point2d(polygon[(i + 2) % polygon.size()]) - b;
+    const double length = cv::norm(edge), l0 = cv::norm(before), l1 = cv::norm(after);
+    if (length < min_edge_px || l0 < 6 || l1 < 6 ||
+        l0 > 1.2 * length || l1 > 1.2 * length) continue;
+    // 양 끝 모두 바깥쪽 직각 모서리여야 한다. 겹침 지점의 오목한 끝은 제외한다.
+    if (orientation * before.cross(edge) <= 0 || orientation * edge.cross(after) <= 0 ||
+        std::abs(before.dot(edge)) > 0.25 * l0 * length ||
+        std::abs(edge.dot(after)) > 0.25 * length * l1) continue;
+    const bool horizontal = std::abs(edge.y) < 0.12 * length;
+    if (!horizontal && std::abs(edge.x) >= 0.12 * length) continue;
+    const auto on_border = [&](const cv::Point2d &point) {
+      return point.x <= border_margin_px || point.y <= border_margin_px ||
+             point.x >= mask.cols - 1 - border_margin_px ||
+             point.y >= mask.rows - 1 - border_margin_px;
+    };
+    if (on_border(a) || on_border(b)) continue;
+    const cv::Point2d inward = orientation * cv::Point2d(-edge.y, edge.x) / length;
+    int support = 0;
+    for (int sample = 1; sample < 10; ++sample) {
+      const auto inside = a + edge * (sample / 10.0) + inward * 3.0;
+      const auto outside = a + edge * (sample / 10.0) - inward * 3.0;
+      if (colored(mask, cvRound(inside.x), cvRound(inside.y)) &&
+          !colored(mask, cvRound(outside.x), cvRound(outside.y))) ++support;
+    }
+    if (support < 8) continue;
+    cv::Point2d first = a, last = b;
+    if ((horizontal && first.x > last.x) || (!horizontal && first.y > last.y))
+      std::swap(first, last);
+    edges.push_back({first, last, horizontal, horizontal ? inward.y > 0 : inward.x > 0});
+  }
+  // 긴 변을 우선 사용한다. 얇은 띠에서는 짧은 가림 경계를 40cm로 취급하지 않는다.
+  std::stable_sort(edges.begin(), edges.end(), [](const VisibleEdge &a, const VisibleEdge &b) {
+    const double la = cv::norm(a.last - a.first), lb = cv::norm(b.last - b.first);
+    const auto group_a = std::lround(la / 3.0), group_b = std::lround(lb / 3.0);
+    if (group_a != group_b) return group_a > group_b;
+    return a.upper_or_left && !b.upper_or_left;
+  });
+  return edges;
+}
+
+std::optional<cv::Vec3d> position_from_visible_edge(
+    const VisibleEdge &edge, double side_m,
+    const cv::Mat &camera_matrix, const cv::Mat &distortion) {
+  if (!(side_m > 0) || !std::isfinite(side_m)) return std::nullopt;
+  std::vector<cv::Point2d> normalized;
+  try {
+    cv::undistortPoints(std::vector<cv::Point2d>{edge.first, edge.last},
+                        normalized, camera_matrix, distortion);
+  } catch (const cv::Exception &) {
+    return std::nullopt;
+  }
+  const double projected = edge.horizontal ?
+      std::abs(normalized[1].x - normalized[0].x) :
+      std::abs(normalized[1].y - normalized[0].y);
+  if (!std::isfinite(projected) || projected <= 1e-6) return std::nullopt;
+  const double z = side_m / projected;
+  const cv::Point2d middle = (normalized[0] + normalized[1]) * 0.5;
+  // 영상 좌표 y는 아래가 양수. 위쪽 변에서는 한 변, 세로 변에서는 반 변 내려 잡는다.
+  const double offset_y = edge.horizontal ?
+      (edge.upper_or_left ? side_m : 0.0) : side_m * 0.5;
+  // 세로 변을 사용하면 변에서 판 중심까지 가로로 반 변만큼 이동한다.
+  const double offset_x = edge.horizontal ? 0.0 :
+      (edge.upper_or_left ? side_m * 0.5 : -side_m * 0.5);
+  const cv::Vec3d position{middle.x * z + offset_x, middle.y * z + offset_y, z};
+  if (!std::isfinite(position[0]) || !std::isfinite(position[1]) ||
+      !std::isfinite(position[2])) return std::nullopt;
+  return position;
+}
+
 std::optional<GroundProjection> project_to_ground(
     const Detection &detection, double camera_height_m) {
   const double range = detection.distance_m;
@@ -406,6 +503,41 @@ std::optional<Detection> DistanceEstimator::line_pose_for_component(
   return pose;
 }
 
+std::optional<Detection> DistanceEstimator::pose_for_visible_edge(
+    const VisibleEdge &visible_edge) const {
+  // 전체 윤곽 대신 판 하나의 온전한 변으로 거리와 추정 모서리를 만든다.
+  const auto *edge = &visible_edge;
+  const auto position = position_from_visible_edge(
+      *edge, config_.obstacle_size_m, camera_matrix_, distortion_);
+  if (!position) return std::nullopt;
+  const double range = cv::norm(*position);
+  if (range < config_.min_distance_m || range > config_.max_distance_m) return std::nullopt;
+  Detection one_edge;
+  one_edge.position = *position;
+  one_edge.distance_m = range;
+  one_edge.color_split_estimate = true;
+  // 메시지에는 추정한 전체 정사각형의 네 모서리를 넣는다.
+  const double pixels = cv::norm(edge->last - edge->first);
+  if (edge->horizontal) {
+    const double dy = edge->upper_or_left ? pixels : -pixels;
+    const cv::Point2d shift(0.0, dy);
+    one_edge.corners = edge->upper_or_left ?
+        std::array<cv::Point2d, 4>{edge->first, edge->last,
+                                    edge->last + shift, edge->first + shift} :
+        std::array<cv::Point2d, 4>{edge->first + shift, edge->last + shift,
+                                    edge->last, edge->first};
+  } else {
+    const double dx = edge->upper_or_left ? pixels : -pixels;
+    const cv::Point2d shift(dx, 0.0);
+    one_edge.corners = edge->upper_or_left ?
+        std::array<cv::Point2d, 4>{edge->first, edge->first + shift,
+                                    edge->last + shift, edge->last} :
+        std::array<cv::Point2d, 4>{edge->first + shift, edge->first,
+                                    edge->last, edge->last + shift};
+  }
+  return one_edge;
+}
+
 DetectResult DistanceEstimator::detect(const cv::Mat &bgr) const {
   DetectResult result;
   if (bgr.empty()) {
@@ -459,7 +591,35 @@ DetectResult DistanceEstimator::detect(const cv::Mat &bgr) const {
           pose->color = entry.first;
           result.detections.push_back(*pose);
           ++debug.detections;
+          recovered = true;
         }
+      }
+      // 앞 판을 찾았어도 같은 윤곽에 붙은 뒤 판의 변을 계속 검사한다.
+      for (const auto &edge : find_complete_visible_edges(
+          contour, mask, config_.min_edge_px, config_.border_margin_px)) {
+        pose = pose_for_visible_edge(edge);
+        if (!pose) continue;
+        pose->color = entry.first;
+        const auto box = cv::boundingRect(std::vector<cv::Point2f>(
+            pose->corners.begin(), pose->corners.end()));
+        const bool duplicate = std::any_of(result.detections.begin(), result.detections.end(),
+            [&](const Detection &known) {
+              if (known.color != entry.first) return false;
+              const auto other = cv::boundingRect(std::vector<cv::Point2f>(
+                  known.corners.begin(), known.corners.end()));
+              const cv::Point2d center(box.x + box.width * 0.5, box.y + box.height * 0.5);
+              const cv::Point2d other_center(other.x + other.width * 0.5, other.y + other.height * 0.5);
+              const bool same_depth = std::abs(pose->position[2] - known.position[2]) <
+                  0.15 * std::min(pose->position[2], known.position[2]);
+              if (same_depth && cv::norm(center - other_center) <
+                  0.85 * std::min(box.width, other.width)) return true;
+              const double overlap = (box & other).area();
+              return overlap / std::max(1.0, double(box.area() + other.area()) - overlap) > 0.5;
+            });
+        // 한 판에서 여러 변을 찾더라도 거리 표시는 하나만 남긴다.
+        if (duplicate) continue;
+        result.detections.push_back(*pose);
+        ++debug.detections;
       }
     }
   }

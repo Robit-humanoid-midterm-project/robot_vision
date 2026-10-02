@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iomanip>
 #include <memory>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -17,6 +18,7 @@
 #include <sensor_msgs/image_encodings.hpp>
 #include <sensor_msgs/msg/image.hpp>
 
+#include "humanoid_interfaces/msg/vision_data.hpp"
 #include "robot_vision/distance_estimator.hpp"
 #include "robot_vision/row_line_estimator.hpp"
 #include "robot_vision/lane_line_estimator.hpp"
@@ -39,6 +41,63 @@ std::string signed_two_decimals(double value) {
   std::ostringstream stream;
   stream << std::showpos << std::fixed << std::setprecision(2) << value;
   return stream.str();
+}
+
+// 판별로 네 값을 묶어 표시한다. 바닥/전방 값은 기존 바닥 투영 결과를 사용한다.
+// OpenCV 기본 글꼴은 한글을 지원하지 않아 화면에는 영문 항목명을 사용한다.
+void draw_distance_label(cv::Mat &canvas, const Detection &detection,
+                         const std::optional<GroundProjection> &ground,
+                         std::vector<cv::Rect> &occupied) {
+  if (canvas.empty() || !std::isfinite(detection.distance_m)) return;
+  cv::Point2d anchor = detection.corners[0];
+  for (const auto &corner : detection.corners) {
+    anchor.x = std::min(anchor.x, corner.x);
+    anchor.y = std::min(anchor.y, corner.y);
+  }
+  if (!std::isfinite(anchor.x) || !std::isfinite(anchor.y)) return;
+  const std::vector<std::string> lines{
+      detection.color + (detection.color_split_estimate ? " (est.)" : ""),
+      "Range: " + two_decimals(detection.distance_m) + " m",
+      "Ground: " + (ground ? two_decimals(ground->radial_m) + " m" : "N/A"),
+      "Forward: " + (ground ? two_decimals(ground->forward_m) + " m" : "N/A"),
+      "Lateral: " + signed_two_decimals(detection.position[0]) + " m"};
+  constexpr double scale = 0.43;
+  constexpr int line_height = 18, padding = 5;
+  int width = 0, baseline = 0;
+  for (const auto &line : lines)
+    width = std::max(width, cv::getTextSize(line, cv::FONT_HERSHEY_SIMPLEX,
+                                          scale, 1, &baseline).width);
+  width = std::min(width + 2 * padding, canvas.cols);
+  const int height = std::min(int(lines.size()) * line_height + 2 * padding, canvas.rows);
+  const int min_y = std::min(70, canvas.rows - height);
+  cv::Rect box(std::clamp(cvRound(anchor.x), 0, canvas.cols - width),
+               std::clamp(cvRound(anchor.y) - height - 5, min_y, canvas.rows - height),
+               width, height);
+  // 붙어 있는 판들의 정보창이 서로 덮이지 않도록 빈 자리를 찾는다.
+  const auto overlaps = [&](const cv::Rect &candidate) {
+    return std::any_of(occupied.begin(), occupied.end(), [&](const cv::Rect &other) {
+      return (candidate & other).area() > 0;
+    });
+  };
+  if (overlaps(box)) {
+    bool placed = false;
+    for (int y = min_y; y <= canvas.rows - height && !placed; y += line_height) {
+      for (int x = 0; x <= canvas.cols - width; x += 20) {
+        const cv::Rect candidate(x, y, width, height);
+        if (!overlaps(candidate)) { box = candidate; placed = true; break; }
+      }
+    }
+  }
+  occupied.push_back(box);
+  const cv::Scalar color = detection.color == "red" ?
+      cv::Scalar(80, 110, 255) : cv::Scalar(255, 210, 80);
+  // 정보창을 옮겨도 어느 판의 값인지 연결선으로 확인할 수 있다.
+  cv::line(canvas, {box.x + box.width / 2, box.y + box.height / 2},
+           {cvRound(anchor.x), cvRound(anchor.y)}, color, 1, cv::LINE_AA);
+  cv::rectangle(canvas, box, cv::Scalar(20, 20, 20), cv::FILLED);
+  for (size_t i = 0; i < lines.size(); ++i)
+    cv::putText(canvas, lines[i], {box.x + padding, box.y + padding + int(i + 1) * line_height - 4},
+                cv::FONT_HERSHEY_SIMPLEX, scale, color, 1, cv::LINE_AA);
 }
 
 }  // namespace
@@ -136,6 +195,7 @@ class ObstacleDistanceNode final : public rclcpp::Node {
         row_track_max_missing_frames);
 
     const auto image_qos = rclcpp::SensorDataQoS().keep_last(1);
+    master_pub_ = create_publisher<humanoid_interfaces::msg::VisionData>("vision2master", rclcpp::QoS(10));
     output_pub_ = create_publisher<msg::ObstacleArray>("/vision/obstacles", rclcpp::QoS(1));
     lane_pub_ = create_publisher<msg::LaneLine>("/vision/lane_line", rclcpp::QoS(1));
     lane_mask_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/lane_mask", image_qos);
@@ -153,6 +213,7 @@ class ObstacleDistanceNode final : public rclcpp::Node {
     if (!calibration_verified_) {
       RCLCPP_WARN(get_logger(), "UNVERIFIED legacy calibration: check measured distances.");
     }
+    timer = this->create_wall_timer(std::chrono::milliseconds(1000/15), std::bind(&ObstacleDistanceNode::timer_callback, this));
   }
 
   ~ObstacleDistanceNode() override {
@@ -163,6 +224,39 @@ class ObstacleDistanceNode final : public rclcpp::Node {
   }
 
  private:
+  rclcpp:TimeBase::SharedPtr timer;
+  void timer_callback()
+  {
+    master_pub_->publish(message);
+  }
+  // 임시 테스트 규약: obstacle_1[0]에 가장 가까운 판의 Range(m)를 보낸다.
+  // 원래 y/x 상대거리 규약과 다르며, 미측정 필드는 모두 -1000으로 표시한다.
+  void publish_master_test(const msg::ObstacleArray &array, bool frame_drop) {
+    humanoid_interfaces::msg::VisionData message;
+    message.timestamp = rclcpp::Time(array.header.stamp).seconds();
+    message.frame_drop = frame_drop ? 1.0 : 0.0;
+    message.camera_x = message.camera_y = -1000.0;
+    message.left_x_1_dist = message.right_x_2_dist = message.theta = -1000.0;
+    message.section_1.fill(-1000.0);
+    message.section_2.fill(-1000.0);
+    message.section_3.fill(-1000.0);
+    message.section_1_detected = message.section_2_detected = message.section_3_detected = 0.0;
+    message.nearest_line.fill(-1000.0);
+    message.obstacle_1.fill(-1000.0);
+    message.obstacle_2.fill(-1000.0);
+    message.obstacle_3.fill(-1000.0);
+    message.confidence = -1000.0;
+    double closest = std::numeric_limits<double>::infinity();
+    if (!frame_drop) {
+      for (const auto &obstacle : array.detections) {
+        if (std::isfinite(obstacle.distance_m) && obstacle.distance_m > 0)
+          closest = std::min(closest, obstacle.distance_m);
+      }
+    }
+    if (std::isfinite(closest)) message.obstacle_1[0] = closest;
+    master_pub_->publish(message);
+  }
+
   msg::ObstacleArray make_message(const builtin_interfaces::msg::Time &stamp,
                                   const std::string &status) const {
     msg::ObstacleArray array;
@@ -355,6 +449,7 @@ class ObstacleDistanceNode final : public rclcpp::Node {
                               have_image_ ? "image_timeout" : "no_image");
     slot_view_ = make_slot_view(DetectResult{}, {}, {});
     publish_image(slot_pub_, slot_view_, array.header);
+    publish_master_test(array, true);
     output_pub_->publish(array);
     lane_pub_->publish(msg::LaneLine().set__header(array.header));
     cv::Mat canvas(480, 640, CV_8UC3, cv::Scalar::all(0));
@@ -479,14 +574,17 @@ class ObstacleDistanceNode final : public rclcpp::Node {
       cv::drawContours(canvas, contours, -1, cv::Scalar(0, 0, 0), 4, cv::LINE_AA);
       cv::drawContours(canvas, contours, -1, color, 2, cv::LINE_AA);
     }
+    std::vector<cv::Rect> distance_labels;
     for (const auto &detection : result.detections) {
+      const auto ground = project_to_ground(detection, camera_height_m_);
+      draw_distance_label(canvas, detection, ground, distance_labels);
       msg::ObstacleDetection item;
       item.color = detection.color;
       item.position.x = detection.position[0];
       item.position.y = detection.position[1];
       item.position.z = detection.position[2];
       item.distance_m = detection.distance_m;
-      if (const auto ground = project_to_ground(detection, camera_height_m_)) {
+      if (ground) {
         item.ground_distance_m = ground->radial_m;
         item.ground_distance_valid = true;
         item.forward_distance_m = ground->forward_m;
@@ -513,6 +611,7 @@ class ObstacleDistanceNode final : public rclcpp::Node {
                 {8, 62}, cv::FONT_HERSHEY_SIMPLEX, 0.39, cv::Scalar(0, 0, 0), 3, cv::LINE_AA);
     cv::putText(canvas, lane_note + " | GREEN/YELLOW = base/row",
                 {8, 62}, cv::FONT_HERSHEY_SIMPLEX, 0.39, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+    publish_master_test(array, false);
     output_pub_->publish(array);
     publish_image(debug_pub_, canvas, image->header);
     publish_image(mask_pub_, result.mask_preview, image->header);
@@ -534,6 +633,7 @@ class ObstacleDistanceNode final : public rclcpp::Node {
   double max_processing_fps_{15}, image_timeout_s_{1}, camera_height_m_{0.60};
   std::unique_ptr<DistanceEstimator> estimator_;
   std::unique_ptr<RowLineTracker> row_tracker_;
+  rclcpp::Publisher<humanoid_interfaces::msg::VisionData>::SharedPtr master_pub_;
   rclcpp::Publisher<msg::ObstacleArray>::SharedPtr output_pub_;
   rclcpp::Publisher<msg::LaneLine>::SharedPtr lane_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr lane_mask_pub_;

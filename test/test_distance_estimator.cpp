@@ -253,6 +253,22 @@ TEST(DistanceEstimatorCpp, SeparatesTouchingRedSquares) {
   EXPECT_NEAR(front->distance_m, std::sqrt(1.46), 0.2);
 }
 
+TEST(DistanceEstimatorCpp, EstimatesRangeFromOccludedSquareTopEdge) {
+  DetectorConfig config;
+  DistanceEstimator estimator(config);
+  cv::Mat image(480, 640, CV_8UC3, cv::Scalar::all(0));
+  const auto square = projected_square(config, {0, 0, 2});
+  cv::fillConvexPoly(image, square, cv::Scalar(0, 0, 255));
+  // 아래 대부분을 가려 위쪽 전체 변과 양 끝 모서리만 남긴다.
+  const auto box = cv::boundingRect(square);
+  cv::rectangle(image, {box.x, box.y + 25}, {box.br().x, box.br().y},
+                cv::Scalar::all(0), cv::FILLED);
+  const auto result = estimator.detect(image);
+  ASSERT_EQ(result.detections.size(), 1u);
+  EXPECT_NEAR(result.detections[0].position[2], 2.0, 0.15);
+  EXPECT_TRUE(result.detections[0].color_split_estimate);
+}
+
 TEST(DistanceEstimatorCpp, RejectsIncompleteShapesAndWrongResolution) {
   DistanceEstimator estimator(DetectorConfig{});
   cv::Mat image(480, 640, CV_8UC3, cv::Scalar::all(0));
@@ -323,4 +339,35 @@ TEST(ColorRegions, RetainsImagePositionsAtDifferentResolutionAndRejectsNoise) {
   EXPECT_NEAR(result.image_candidates[0].center.y, 250, 1);
   EXPECT_EQ(result.status, "image_size_mismatch");
   EXPECT_TRUE(result.detections.empty());
+}
+
+// 같은 색 판이 하나의 윤곽이 되어도 뒤 판의 온전한 왼쪽 변을 찾아야 한다.
+TEST(VisibleEdges, RecoversRearPlateFromMergedBlueContour) {
+  robot_vision::DetectorConfig config;
+  config.distortion_coefficients = {0, 0, 0, 0, 0};
+  cv::Mat frame(480, 640, CV_8UC3, cv::Scalar::all(0));
+  cv::rectangle(frame, {110, 150}, {190, 230}, cv::Scalar(255, 0, 0), cv::FILLED);
+  cv::rectangle(frame, {150, 190}, {310, 350}, cv::Scalar(255, 0, 0), cv::FILLED);
+  const auto result = robot_vision::DistanceEstimator(config).detect(frame);
+  ASSERT_EQ(result.detections.size(), 2u);
+  EXPECT_NEAR(result.detections[0].position[2], config.camera_matrix[0] * 0.4 / 160, 0.1);
+  EXPECT_NEAR(result.detections[1].position[2], config.camera_matrix[4] * 0.4 / 80, 0.1);
+}
+
+TEST(VisibleEdges, UserOverlapScreenshotWhenAvailable) {
+  const char *path = std::getenv("ROBOT_VISION_OVERLAP_CAMERA_IMAGE");
+  if (!path) GTEST_SKIP() << "No overlap camera image supplied";
+  robot_vision::DetectorConfig config;
+  config.red_lower_1 = {0, 60, 60};
+  const cv::Mat frame = cv::imread(path);
+  ASSERT_FALSE(frame.empty());
+  const auto result = robot_vision::DistanceEstimator(config).detect(frame);
+  int blue = 0, red = 0;
+  for (const auto &d : result.detections) {
+    blue += d.color == "blue";
+    red += d.color == "red";
+    std::cout << d.color << " z=" << d.position[2] << " range=" << d.distance_m << std::endl;
+  }
+  EXPECT_EQ(blue, 2);
+  EXPECT_EQ(red, 0);
 }

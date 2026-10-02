@@ -9,6 +9,25 @@
 
 namespace robot_vision {
 
+// 정면을 향한 40cm 정사각형 판에서 사용할 변. 연결된 윤곽에서도 여러 후보를 찾는다.
+// 양 끝이 모서리처럼 보이는 변만 후보로 삼는다. 끝점까지 가려진 경우는 구분하기 어렵다.
+struct VisibleEdge {
+  cv::Point2d first;
+  cv::Point2d last;
+  bool horizontal{true};
+  bool upper_or_left{true};
+};
+
+std::vector<VisibleEdge> find_complete_visible_edges(
+    const std::vector<cv::Point> &contour, const cv::Mat &mask,
+    double min_edge_px, int border_margin_px);
+
+// 카메라 보정값으로 두 끝점을 왜곡 보정한 뒤, 40cm 변의 투영 폭에서 깊이를 구한다.
+// 반환 위치는 기존 코드와 같이 판의 아래쪽 변 중심이다.
+std::optional<cv::Vec3d> position_from_visible_edge(
+    const VisibleEdge &edge, double side_m,
+    const cv::Mat &camera_matrix, const cv::Mat &distortion);
+
 struct Detection {
   std::string color;
   cv::Vec3d position{0.0, 0.0, 0.0};
@@ -97,6 +116,8 @@ class DistanceEstimator {
   std::optional<Detection> square_pose(const std::array<cv::Point2d, 4> &corners) const;
 
  private:
+  // 한 변 검출, 거리 계산, 추정 모서리 구성을 한 곳에서 처리한다.
+  std::optional<Detection> pose_for_visible_edge(const VisibleEdge &edge) const;
   std::optional<Detection> pose_for_contour(const std::vector<cv::Point> &contour,
                                             const cv::Mat &mask,
                                             const cv::Size &image_size,

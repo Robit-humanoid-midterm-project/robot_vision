@@ -42,7 +42,7 @@ ros2 launch robot_vision obstacle_distance.launch.py
 - image_candidates: 색상 영역의 위치 후보
 - detections: 사각형·거리 조건까지 통과한 결과
 
-따라서 거리 계산에 실패해도 image_candidates는 사라지지 않아. 입력 해상도가 보정 기준과 달라도 영상 위치 후보는 남고, 거리 계산만 중단해.
+따라서 거리 계산에 실패해도 image_candidates는 사라지지 않는다. 입력 해상도가 보정 기준과 달라도 영상 위치 후보는 남고, 거리 계산만 중단한다.
 
 ### 4. 화면에 표시  
 
@@ -59,7 +59,7 @@ ros2 launch robot_vision obstacle_distance.launch.py
 기존 카메라가 실행된 ROS 환경에서:
 
 ```bash
-cd /home/doyeon/colcon_ws
+cd /home/robit/colcon_ws
 colcon build --packages-select robot_vision --cmake-args -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
 source install/setup.bash
 ros2 launch robot_vision bev.launch.py config:=/home/doyeon/colcon_ws/src/robot_vision/config/obstacle_distance.yaml
@@ -88,7 +88,7 @@ ros2 launch robot_vision bev.launch.py config:=/home/doyeon/colcon_ws/src/robot_
 Pan  : -145° ~ +145°
 Tilt :  -90° ~ +100°
 - 실행 방법
-카메라 실행 : 
+카메라 실행(이것만으로 카메라화면이 뜨지 않는다. 단순 pan tilt 바꾸는 용도) : 
 source /home/robit/colcon_ws/install/setup.bash
 ros2 launch insta360_usb_cam usb_cam.launch.py
 pan을 돌리고 싶을때 : 
@@ -96,3 +96,6 @@ v4l2-ctl -d /dev/video0 --set-ctrl=pan_absolute=0
 tilt를 돌리고 싶을때 : 
 v4l2-ctl -d /dev/video0 --set-ctrl=tilt_absolute=40000
 - 
+
+source /home/doyeon/colcon_ws/install/setup.bash
+ros2 topic echo /vision2master --field obstacle_1
