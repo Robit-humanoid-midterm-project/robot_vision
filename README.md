@@ -91,11 +91,13 @@ Tilt :  -90° ~ +100°
 카메라 실행(이것만으로 카메라화면이 뜨지 않는다. 단순 pan tilt 바꾸는 용도) : 
 source /home/robit/colcon_ws/install/setup.bash
 ros2 launch insta360_usb_cam usb_cam.launch.py
+
 pan을 돌리고 싶을때 : 
 v4l2-ctl -d /dev/video0 --set-ctrl=pan_absolute=0 
 tilt를 돌리고 싶을때 : 
 v4l2-ctl -d /dev/video0 --set-ctrl=tilt_absolute=40000
-- 
+
+맨 뒤에 숫자를 바꿔 카메라 각도를 조절할 수 있다.
 
 source /home/doyeon/colcon_ws/install/setup.bash
 ros2 topic echo /vision2master --field obstacle_1
@@ -108,3 +110,9 @@ ros2 topic echo /vision2master --field obstacle_1
 | **Ground** | 카메라 바로 아래 바닥 지점 → 판까지의 바닥거리 |
 | **Forward** | 바닥거리 중 전방 방향 성분 |
 | **Lateral** | 좌우 편차: 왼쪽 `−`, 오른쪽 `+` |
+
+## 사진 촬영 방법 
+
+cd /home/robit/colcon_ws/src/robot_vision
+g++ -std=c++17 src/yolo_raw_picture.cpp -o yolo_raw_picture $(pkg-config --cflags --libs opencv4)
+./yolo_raw_picture
