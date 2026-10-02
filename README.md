@@ -84,5 +84,15 @@ ros2 launch robot_vision bev.launch.py config:=/home/doyeon/colcon_ws/src/robot_
 
 ## 카메라 펜 틸트 조정 방법 
 
--
--
+- 3600 = 1°이며, 카메라의 각도 범위는 다음과 같다.
+Pan  : -145° ~ +145°
+Tilt :  -90° ~ +100°
+- 실행 방법
+카메라 실행 : 
+source /home/robit/colcon_ws/install/setup.bash
+ros2 launch insta360_usb_cam usb_cam.launch.py
+pan을 돌리고 싶을때 : 
+v4l2-ctl -d /dev/video0 --set-ctrl=pan_absolute=0 
+tilt를 돌리고 싶을때 : 
+v4l2-ctl -d /dev/video0 --set-ctrl=tilt_absolute=40000
+- 
