@@ -7,8 +7,8 @@ source ~/colcon_ws/install/setup.bash
 ros2 launch robot_vision obstacle_distance.launch.py
 
 v4l2-ctl -d /dev/video0 --set-ctrl=pan_absolute=0 
-v4l2-ctl -d /dev/video0 --set-ctrl=tilt_absolute=-80000
-v4l2-ctl -d /dev/video0 --set-ctrl=roll_absolute=-10000
+v4l2-ctl -d /dev/video0 --set-ctrl=tilt_absolute=-77000
+v4l2-ctl -d /dev/video0 --set-ctrl=roll_absolute=0
 v4l2-ctl -d /dev/video0 --set-ctrl=zoom_absolute=100
 
 

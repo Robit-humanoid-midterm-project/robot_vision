@@ -253,6 +253,35 @@ TEST(DistanceEstimatorCpp, SeparatesTouchingRedSquares) {
   EXPECT_NEAR(front->distance_m, std::sqrt(1.46), 0.2);
 }
 
+TEST(DistanceEstimatorCpp, RejectsBoxSpanningNearAndFarRedPlates) {
+  DetectorConfig config;
+  DistanceEstimator estimator(config);
+  cv::Mat image(480, 640, CV_8UC3, cv::Scalar(30, 105, 25));
+  auto red_with_saturation = [](int saturation) {
+    cv::Mat hsv(1, 1, CV_8UC3, cv::Scalar(0, saturation, 220));
+    cv::Mat bgr;
+    cv::cvtColor(hsv, bgr, cv::COLOR_HSV2BGR);
+    const auto pixel = bgr.at<cv::Vec3b>(0, 0);
+    return cv::Scalar(pixel[0], pixel[1], pixel[2]);
+  };
+  // The rear plate extends left of the front plate. A bounding box around
+  // both would borrow its left side from the rear and its right side from the front.
+  cv::rectangle(image, {194, 278}, {259, 342}, red_with_saturation(230), cv::FILLED);
+  cv::rectangle(image, {222, 314}, {372, 453}, red_with_saturation(230), cv::FILLED);
+  cv::rectangle(image, {280, 360}, {320, 390}, red_with_saturation(90), cv::FILLED);
+  const auto result = estimator.detect(image);
+  for (const auto &detection : result.detections) {
+    if (detection.color != "red" || detection.distance_m >= 2.0) continue;
+    double left = 640, right = 0;
+    for (const auto &corner : detection.corners) {
+      left = std::min(left, corner.x);
+      right = std::max(right, corner.x);
+    }
+    EXPECT_FALSE(left < 210 && right > 360)
+        << "Near detection combines the rear plate's left edge with the front plate's right edge";
+  }
+}
+
 TEST(DistanceEstimatorCpp, EstimatesRangeFromOccludedSquareTopEdge) {
   DetectorConfig config;
   DistanceEstimator estimator(config);
