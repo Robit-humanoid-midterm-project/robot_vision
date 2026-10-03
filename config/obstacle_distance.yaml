@@ -18,7 +18,7 @@ obstacle_distance:
 
     # 기존 장애물 크기와 카메라 높이 (m)
     obstacle_size_m: 0.4
-    camera_height_m: 0.6
+    camera_height_m: 0.61
 
     # 현장에서 조정하는 색상 HSV 및 최소 면적 (px²)
     red_lower_1: [0, 60, 60]

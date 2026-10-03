@@ -6,6 +6,14 @@ colcon build --packages-select insta360_usb_cam robot_vision
 source ~/colcon_ws/install/setup.bash
 ros2 launch robot_vision obstacle_distance.launch.py
 
+v4l2-ctl -d /dev/video0 --set-ctrl=pan_absolute=0 
+v4l2-ctl -d /dev/video0 --set-ctrl=tilt_absolute=-80000
+v4l2-ctl -d /dev/video0 --set-ctrl=roll_absolute=-10000
+v4l2-ctl -d /dev/video0 --set-ctrl=zoom_absolute=100
+
+
+한문단씩 두 터미널에 실행하시면 됩니다. 
+
 ## 코드 전체 흐름
 
 카메라 영상 -> 빨강, 파랑 색상 마스크 생성 -> 잡음 제거 -> 윤곽선 추출 -> 사각형 조건 검사 -> 거리 계산 -> 토픽 발행(현제 화면에 거리계산값은 나오지 않음. 추출한 윤곽선만 표시)
@@ -95,7 +103,12 @@ ros2 launch insta360_usb_cam usb_cam.launch.py
 pan을 돌리고 싶을때 : 
 v4l2-ctl -d /dev/video0 --set-ctrl=pan_absolute=0 
 tilt를 돌리고 싶을때 : 
-v4l2-ctl -d /dev/video0 --set-ctrl=tilt_absolute=40000
+v4l2-ctl -d /dev/video0 --set-ctrl=tilt_absolute=-50000
+zoom값 확인 : 
+v4l2-ctl -d /dev/video2 --list-ctrls | grep zoom
+zoom값 설정(예 : 104) :
+v4l2-ctl -d /dev/video4 --set-ctrl=zoom_absolute=104
+
 
 맨 뒤에 숫자를 바꿔 카메라 각도를 조절할 수 있다.
 
