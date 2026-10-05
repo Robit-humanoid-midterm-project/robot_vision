@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <cv_bridge/cv_bridge.hpp>
+#include <opencv2/calib3d.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
@@ -193,7 +194,7 @@ class ObstacleDistanceNode final : public rclcpp::Node
         lane_config_.max_fit_error_px = declare_parameter<double>("lane_max_fit_error_px", 8.0, fixed);
         lane_config_.group_tolerance_px = declare_parameter<double>("lane_group_tolerance_px", 18.0, fixed);
         lane_config_.min_grass_support = declare_parameter<double>("lane_min_grass_support", 0.60, fixed);
-        lane_config_.bottom_outer_fraction = declare_parameter<double>("lane_bottom_outer_fraction", 0.35, fixed);
+        lane_config_.bottom_outer_fraction = declare_parameter<double>("lane_bottom_outer_fraction", lane_config_.bottom_outer_fraction, fixed);
         calibration_verified_ = config.calibration_verified;
         debug_config_ = config;
         estimator_ = std::make_unique<DistanceEstimator>(std::move(config));
@@ -242,40 +243,40 @@ class ObstacleDistanceNode final : public rclcpp::Node
     // {
     //     master_pub_->publish(message);
     // }
-    // 임시 테스트 규약: 가장 가까운 판의 Range와 Lateral을 obstacle_1에 보낸다.
-    // 원래 y/x 상대거리 규약과 다르며, 미측정 필드는 모두 -1000으로 표시한다.
-    void publish_master_test(const msg::ObstacleArray &array, bool frame_drop)
+    // vision2master: 좌우 경계 거리와 전방 1.5m 미만 장애물 최대 세 개를 보낸다.
+    // y/x 상대거리와 좌우 경계 거리를 전달하며, 미측정 필드는 -1000으로 표시한다.
+    void publish_master_data(const msg::ObstacleArray &array, bool frame_drop,
+                             double left_distance = -1000.0, double right_distance = -1000.0)
     {
         humanoid_interfaces::msg::VisionData message;
         message.timestamp = rclcpp::Time(array.header.stamp).seconds();
-        message.frame_drop = frame_drop ? 1.0 : 0.0;
-        message.camera_x = message.camera_y = -1000.0;
-        message.left_x_1_dist = message.right_x_2_dist = message.theta = -1000.0;
-        message.section_1.fill(-1000.0);
-        message.section_2.fill(-1000.0);
-        message.section_3.fill(-1000.0);
-        message.section_1_detected = message.section_2_detected = message.section_3_detected = 0.0;
-        message.nearest_line.fill(-1000.0);
+        message.left_x_1_dist = message.right_x_2_dist = -1000.0;
         message.obstacle_1.fill(-1000.0);
         message.obstacle_2.fill(-1000.0);
         message.obstacle_3.fill(-1000.0);
-        message.confidence = -1000.0;
-        const msg::ObstacleDetection *closest = nullptr;
         if (!frame_drop)
         {
+            message.left_x_1_dist = left_distance;
+            message.right_x_2_dist = right_distance;
+            std::vector<const msg::ObstacleDetection *> nearby;
             for (const auto &obstacle : array.detections)
             {
-                if (!std::isfinite(obstacle.distance_m) || obstacle.distance_m <= 0 ||
+                if (!obstacle.forward_distance_valid ||
+                    !std::isfinite(obstacle.forward_distance_m) ||
+                    obstacle.forward_distance_m < 0.0 || obstacle.forward_distance_m >= 1.5 ||
                     !std::isfinite(obstacle.position.x))
                     continue;
-                if (!closest || obstacle.distance_m < closest->distance_m)
-                    closest = &obstacle;
+                // No additional overlap filtering in the outgoing message.
+                nearby.push_back(&obstacle);
             }
-        }
-        if (closest)
-        {
-            message.obstacle_1[0] = closest->distance_m;  // Range: 카메라와 판 사이 직선거리(m)
-            message.obstacle_1[1] = closest->position.x;   // Lateral: 왼쪽 음수, 오른쪽 양수(m)
+            std::stable_sort(nearby.begin(), nearby.end(), [](const auto *a, const auto *b) {
+                return std::hypot(a->forward_distance_m, a->position.x) <
+                       std::hypot(b->forward_distance_m, b->position.x);
+            });
+            std::array<double, 2> *slots[] = {
+                &message.obstacle_1, &message.obstacle_2, &message.obstacle_3};
+            for (size_t i = 0; i < std::min(size_t(3), nearby.size()); ++i)
+                *slots[i] = {nearby[i]->forward_distance_m, nearby[i]->position.x};
         }
         master_pub_->publish(message);
     }
@@ -497,7 +498,7 @@ class ObstacleDistanceNode final : public rclcpp::Node
         auto array = make_message(get_clock()->now(), have_image_ ? "image_timeout" : "no_image");
         slot_view_ = make_slot_view(DetectResult{}, {}, {});
         publish_image(slot_pub_, slot_view_, array.header);
-        publish_master_test(array, true);
+        publish_master_data(array, true);
         output_pub_->publish(array);
         lane_pub_->publish(msg::LaneLine().set__header(array.header));
         cv::Mat canvas(480, 640, CV_8UC3, cv::Scalar::all(0));
@@ -623,6 +624,93 @@ class ObstacleDistanceNode final : public rclcpp::Node
                 cv::line(canvas, segment.first, segment.last, cv::Scalar(0, 255, 0), 3, cv::LINE_AA);
             }
         }
+        // Use the nearest visible row depth for the displayed and published lateral distance.
+        double left_distance = -1000.0, right_distance = -1000.0;
+        std::string crossing_note = "CROSS: no lane/row";
+        if (lane.best.valid && !row_lines.empty())
+        {
+            const double center_x = (frame.cols - 1) * 0.5;
+            const auto row_y = [&](const RowLine &row, double x) {
+                return row.first.y + (x - row.first.x) *
+                    (row.last.y - row.first.y) / double(row.last.x - row.first.x);
+            };
+            const RowLine *front = nullptr;
+            for (const auto &row : row_lines)
+                if (row.last.x != row.first.x &&
+                    (!front || row_y(row, center_x) > row_y(*front, center_x)))
+                    front = &row;
+            crossing_note = "CROSS: no valid intersection";
+            if (front)
+            {
+                const cv::Point2d a = lane.best.top;
+                const cv::Point2d d = cv::Point2d(lane.best.bottom) - a;
+                const cv::Point2d b = front->first;
+                const cv::Point2d e = cv::Point2d(front->last) - b;
+                const double denominator = d.cross(e);
+                if (std::abs(denominator) > 1e-6)
+                {
+                    const cv::Point2d crossing = a + d * ((b - a).cross(e) / denominator);
+                    if (crossing.x >= 0 && crossing.x < frame.cols &&
+                        crossing.y >= 0 && crossing.y < frame.rows)
+                    {
+                        cv::drawMarker(canvas, crossing, cv::Scalar(255, 255, 255),
+                                       cv::MARKER_CROSS, 18, 2, cv::LINE_AA);
+                        std::vector<double> depths;
+                        for (const auto &detection : result.detections)
+                        {
+                            const cv::Point2d base = (detection.corners[2] + detection.corners[3]) * 0.5;
+                            if (std::abs(base.y - row_y(*front, base.x)) <= 25.0 &&
+                                std::isfinite(detection.position[2]) && detection.position[2] > 0)
+                                depths.push_back(detection.position[2]);
+                        }
+                        crossing_note = "CROSS " + lane.best.side + ": no row depth";
+                        if (!depths.empty())
+                        {
+                            std::sort(depths.begin(), depths.end());
+                            const size_t middle = depths.size() / 2;
+                            const double depth = depths.size() % 2 ? depths[middle] :
+                                (depths[middle - 1] + depths[middle]) * 0.5;
+                            const cv::Mat k(3, 3, CV_64F, debug_config_.camera_matrix.data());
+                            const cv::Mat distortion(1, debug_config_.distortion_coefficients.size(),
+                                                     CV_64F, debug_config_.distortion_coefficients.data());
+                            std::vector<cv::Point2d> normalized;
+                            cv::undistortPoints(std::vector<cv::Point2d>{crossing}, normalized, k, distortion);
+                            const double lateral = normalized.front().x * depth;
+                            if (std::isfinite(lateral))
+                            {
+                                crossing_note = "CROSS " + lane.best.side + " | lateral ~" +
+                                    two_decimals(std::abs(lateral)) + " m | x " +
+                                    signed_two_decimals(lateral) + " m";
+                                const double boundary_distance = std::abs(lateral);
+                                // Camera inside a 1.5 m wide field, aligned with its length.
+                                if (boundary_distance <= 1.5)
+                                {
+                                    if (lane.best.side == "left")
+                                    {
+                                        left_distance = boundary_distance;
+                                        right_distance = 1.5 - boundary_distance;
+                                    }
+                                    else if (lane.best.side == "right")
+                                    {
+                                        right_distance = boundary_distance;
+                                        left_distance = 1.5 - boundary_distance;
+                                    }
+                                    crossing_note += " | L " + two_decimals(left_distance) +
+                                        " R " + two_decimals(right_distance);
+                                }
+                                else
+                                    crossing_note += " | outside width";
+                                std::vector<cv::Point2d> principal;
+                                cv::projectPoints(std::vector<cv::Point3d>{{0, normalized.front().y, 1}},
+                                    cv::Vec3d(0, 0, 0), cv::Vec3d(0, 0, 0), k, distortion, principal);
+                                cv::line(canvas, cv::Point(cvRound(principal.front().x), cvRound(crossing.y)),
+                                         crossing, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Draw observed color contours independently of metric pose acceptance.
         for (const auto &candidate : result.image_candidates)
         {
@@ -671,7 +759,11 @@ class ObstacleDistanceNode final : public rclcpp::Node
                     cv::Scalar(0, 0, 0), 3, cv::LINE_AA);
         cv::putText(canvas, lane_note + " | GREEN/YELLOW = base/row", {8, 62}, cv::FONT_HERSHEY_SIMPLEX, 0.39,
                     cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
-        publish_master_test(array, false);
+        cv::putText(canvas, crossing_note, {8, 81}, cv::FONT_HERSHEY_SIMPLEX, 0.42,
+                    cv::Scalar(0, 0, 0), 3, cv::LINE_AA);
+        cv::putText(canvas, crossing_note, {8, 81}, cv::FONT_HERSHEY_SIMPLEX, 0.42,
+                    cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+        publish_master_data(array, false, left_distance, right_distance);
         output_pub_->publish(array);
         publish_image(debug_pub_, canvas, image->header);
         publish_image(mask_pub_, result.mask_preview, image->header);

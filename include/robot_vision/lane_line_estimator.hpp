@@ -21,7 +21,8 @@ struct LaneConfig {
   double max_fit_error_px{8.0};
   double group_tolerance_px{18.0};
   double min_grass_support{0.60};
-  double bottom_outer_fraction{0.35};
+  // Allow a boundary near image center; reject lines crossing into the opposite half.
+  double bottom_outer_fraction{0.49};
 };
 
 struct LaneLine {

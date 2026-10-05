@@ -84,14 +84,24 @@ LaneResult estimate_lane_line(const cv::Mat &bgr, const LaneConfig &config,
                   std::max(25.0, h * 0.07), 18);
   std::vector<Candidate> candidates;
   for (const auto &segment : segments) {
-    // Field paint is observed near the robot; high shelf edges must not seed a lane.
-    if (std::max(segment[1], segment[3]) <
-        h * config.candidate_min_bottom_y_fraction) continue;
+    // Accept a long boundary leaving through a side before reaching the lower ROI.
+    // Short upper-image shelf edges still cannot seed a lane.
+    const bool reaches_lower_roi = std::max(segment[1], segment[3]) >=
+        h * config.candidate_min_bottom_y_fraction;
     const double dy = segment[3] - segment[1];
     if (std::abs(dy) < h * 0.07) continue;
     const double slope = (segment[2] - segment[0]) / dy;
     if (std::abs(slope) < config.min_abs_dx_per_dy ||
         std::abs(slope) > config.max_abs_dx_per_dy) continue;
+    const double exit_x = slope < 0 ? 0.0 : w - 1.0;
+    const double exit_y = segment[1] + (exit_x - segment[0]) / slope;
+    const int lower_y = std::max(segment[1], segment[3]);
+    // Hough may split a boundary into short pieces; admit lower pieces whose
+    // continuation leaves the side, then enforce total observed span in the fit.
+    const bool exits_side = exit_y >= h * 0.45 && exit_y < h &&
+        lower_y >= h * 0.40 && exit_y >= lower_y - h * 0.05 &&
+        exit_y - lower_y <= h * 0.25;
+    if (!reaches_lower_roi && !exits_side) continue;
     const int side = slope < 0 ? 0 : 1;
     const double reference_x = segment[0] + slope * (reference_y - segment[1]);
     const double bottom_x = segment[0] + slope * (h - 1 - segment[1]);
