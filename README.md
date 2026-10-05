@@ -15,6 +15,15 @@ v4l2-ctl -d /dev/video0 --set-ctrl=zoom_absolute=100
 
 한문단씩 두 터미널에 실행하시면 됩니다. 
 
+## 현재 ROS2 msg
+
+토픽: /vision2master
+타입: humanoid_interfaces/msg/VisionData
+현재 필드: timestamp, left_x_1_dist, right_x_2_dist, obstacle_1~3
+단위: m, 장애물 순서 (전방 y, 좌우 x)
+좌우 부호: 왼쪽 음수·오른쪽 양수
+미측정: -1000
+
 ## 코드 전체 흐름
 
 카메라 영상 -> 빨강, 파랑 색상 마스크 생성 -> 잡음 제거 -> 윤곽선 추출 -> 사각형 조건 검사 -> 거리 계산 -> 토픽 발행(현제 화면에 거리계산값은 나오지 않음. 추출한 윤곽선만 표시)
