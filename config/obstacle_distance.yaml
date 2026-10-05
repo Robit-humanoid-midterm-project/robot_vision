@@ -23,7 +23,7 @@ obstacle_distance:
     # 현장에서 조정하는 색상 HSV 및 최소 면적 (px²)
     red_lower_1: [0, 60, 60]
     red_upper_1: [12, 255, 255]
-    red_lower_2: [168, 100, 60]
+    red_lower_2: [168, 60, 60]
     red_upper_2: [179, 255, 255]
     blue_lower: [105, 170, 45]
     blue_upper: [125, 255, 255]
