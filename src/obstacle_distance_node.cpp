@@ -193,7 +193,7 @@ class ObstacleDistanceNode final : public rclcpp::Node
             declare_parameter<double>("lane_min_observed_height_fraction", 0.18, fixed);
         lane_config_.max_fit_error_px = declare_parameter<double>("lane_max_fit_error_px", 8.0, fixed);
         lane_config_.group_tolerance_px = declare_parameter<double>("lane_group_tolerance_px", 18.0, fixed);
-        lane_config_.min_grass_support = declare_parameter<double>("lane_min_grass_support", 0.60, fixed);
+        lane_config_.min_grass_support = declare_parameter<double>("lane_min_grass_support", 0.70, fixed);
         lane_config_.bottom_outer_fraction = declare_parameter<double>("lane_bottom_outer_fraction", lane_config_.bottom_outer_fraction, fixed);
         calibration_verified_ = config.calibration_verified;
         debug_config_ = config;
