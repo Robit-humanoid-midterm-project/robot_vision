@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.8)
 project(robot_vision)
+# Use optimized builds by default for real-time vision. Explicit Debug choices remain supported.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -21,14 +25,28 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   DEPENDENCIES std_msgs geometry_msgs)
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
-add_library(distance_estimator STATIC src/color_region_detector.cpp src/distance_estimator.cpp src/row_line_estimator.cpp src/lane_line_estimator.cpp)
+add_library(distance_estimator STATIC
+  src/color_region_detector.cpp
+  src/distance_estimator.cpp
+  src/row_line_estimator.cpp
+  src/lane_line_estimator.cpp)
 target_include_directories(distance_estimator PUBLIC include ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(distance_estimator PUBLIC ${OpenCV_LIBRARIES})
+
+add_library(vision_pipeline STATIC src/vision_pipeline.cpp src/field_geometry.cpp)
+target_link_libraries(vision_pipeline PUBLIC distance_estimator)
+
+add_library(vision_viewer STATIC src/vision_viewer.cpp)
+target_link_libraries(vision_viewer PUBLIC vision_pipeline)
+
+add_library(vision_message_builder STATIC src/vision_message_builder.cpp)
+ament_target_dependencies(vision_message_builder rclcpp std_msgs humanoid_interfaces)
+target_link_libraries(vision_message_builder vision_pipeline "${cpp_typesupport_target}")
 
 add_executable(obstacle_distance_node src/obstacle_distance_node.cpp)
 target_include_directories(obstacle_distance_node PRIVATE include ${OpenCV_INCLUDE_DIRS})
 ament_target_dependencies(obstacle_distance_node rclcpp sensor_msgs std_msgs cv_bridge humanoid_interfaces)
-target_link_libraries(obstacle_distance_node distance_estimator "${cpp_typesupport_target}" ${OpenCV_LIBRARIES})
+target_link_libraries(obstacle_distance_node vision_viewer vision_message_builder "${cpp_typesupport_target}" ${OpenCV_LIBRARIES})
 add_dependencies(obstacle_distance_node ${PROJECT_NAME})
 
 add_executable(bev_node src/bev_node.cpp)
@@ -44,6 +62,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_distance_estimator_cpp test/test_distance_estimator.cpp)
   target_include_directories(test_distance_estimator_cpp PRIVATE include ${OpenCV_INCLUDE_DIRS})
   target_link_libraries(test_distance_estimator_cpp distance_estimator ${OpenCV_LIBRARIES})
+  ament_add_gtest(test_vision_pipeline_cpp test/test_vision_pipeline.cpp)
+  target_link_libraries(test_vision_pipeline_cpp vision_viewer vision_message_builder)
 endif()
 
 ament_export_dependencies(rosidl_default_runtime)

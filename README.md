@@ -26,9 +26,9 @@ v4l2-ctl -d /dev/video0 --set-ctrl=zoom_absolute=100
 
 ## 코드 전체 흐름
 
-카메라 영상 -> 빨강, 파랑 색상 마스크 생성 -> 잡음 제거 -> 윤곽선 추출 -> 사각형 조건 검사 -> 거리 계산 -> 토픽 발행(현제 화면에 거리계산값은 나오지 않음. 추출한 윤곽선만 표시)
+카메라 영상 -> 빨강, 파랑 색상 마스크 생성 -> 잡음 제거 -> 윤곽선 추출 -> 사각형 조건 검사 -> 거리 계산 -> 토픽 발행 및 윤곽선·거리 라벨 표시
 
-현재 윤곽선만 보이게 하였으며 사각형 조건 검사후 거리를 계산해야 장애물이라 가정하겠다. 추후 변경할 예정.
+색상 영역의 윤곽선은 거리 계산 성공 여부와 관계없이 표시한다. 사각형·거리 조건을 통과한 판에는 거리 라벨을 함께 표시한다.
 
 ### 1. 색상 영역 찾기 
 
@@ -64,7 +64,7 @@ v4l2-ctl -d /dev/video0 --set-ctrl=zoom_absolute=100
 
 ### 4. 화면에 표시  
 
-[obstacle_distance_node.cpp]에서 image_candidates를 순회하며 윤곽선을 그린다.
+[vision_viewer.cpp]에서 image_candidates를 순회하며 윤곽선과 계산된 거리 라벨을 그린다.
 
 -------------------------------------------
 
@@ -137,5 +137,44 @@ ros2 topic echo /vision2master --field obstacle_1
 ## 사진 촬영 방법 
 
 cd /home/robit/colcon_ws/src/robot_vision
-g++ -std=c++17 src/yolo_raw_picture.cpp -o yolo_raw_picture $(pkg-config --cflags --libs opencv4)
-./yolo_raw_picture
+g++ -std=c++17 src/capture_dataset.cpp -o capture_dataset $(pkg-config --cflags --libs opencv4)
+./capture_dataset
+
+## 파일별 역할
+
+카메라 영상을 받은 뒤 장애물·차선·행을 분석하고, 계산 결과를 로봇용 메시지와 화면에 사용한다.
+검출 기준과 캘리브레이션은 유지하며, 처리 목표는 `max_processing_fps: 30.0`이다.
+실제 FPS는 카메라 입력과 처리 시간에 따라 달라진다.
+
+| 파일 | 역할 |
+|---|---|
+| `obstacle_distance_node.cpp` | ROS 설정, 영상 수신, 처리 주기 제한, 결과 발행, 영상 끊김 감시, 처리 FPS 기록 |
+| `vision_pipeline.cpp` | 장애물·차선·행 검출 호출, 행 추적과 프레임 결과 관리 |
+| `field_geometry.cpp` | 차선과 행의 교차점, 좌우 경계 거리 계산 |
+| `vision_message_builder.cpp` | 장애물·차선·로봇 제어용 ROS 메시지 생성 |
+| `vision_viewer.cpp` | 윤곽선·거리·행 표시, 전처리 화면 생성, 통합 창 표시와 키 입력 |
+| `color_region_detector.cpp` | 빨강·파랑 색상 마스크와 영역 후보 추출 |
+| `distance_estimator.cpp` | 판의 위치·거리 추정 및 가려진 판의 검출 복구 |
+| `lane_line_estimator.cpp` | 흰색 바닥 경계선 검출 |
+| `row_line_estimator.cpp` | 장애물 아래쪽 경계의 행 추정, 여러 프레임의 추적 결과 평활화 |
+| `bev_node.cpp` | 별도 BEV 보정·미리보기 도구 |
+| `capture_dataset.cpp` | 별도 원본·마스크 사진 저장 도구. 수동 빌드하며 YOLO 추론은 수행하지 않음 |
+
+`VisionFrameResult`는 장애물, 차선, 행, 거리 등 한 프레임의 계산 결과를 묶는다.
+화면 표시와 메시지 생성이 이 결과를 공유한다. 영상이 끊기면
+`VisionPipeline::reset_tracking()`으로 행 추적 이력을 초기화한다.
+
+`frame_rate_limiter.hpp`는 일정한 처리 시각을 기준으로 프레임을 선택한다.
+로봇용 결과는 화면 처리보다 먼저 발행하며, 디버그 영상은 구독자가 있을 때 발행한다.
+통합 화면 상단의 FPS와 5초마다 출력하는 로그는 프로그램 내부의 처리 속도다.
+
+통합 화면은 왼쪽 검출 결과, 오른쪽 위 마스크, 오른쪽 아래 원본 영상으로 구성한다.
+임시 3×3 배치 계산·화면 패널과 `/vision/slot_map` 토픽은 제거했다.
+차선·행 검출과 `vision2master`, `/vision/obstacles`, `/vision/lane_line`은 유지한다.
+좌우 경계 거리에는 기존의 경기장 폭 1.5m와 카메라 정렬 가정이 적용된다.
+
+카메라 패키지의 `usb_camera.cpp`는 장치 통신, 영상 수신·디코딩·축소를 담당한다.
+`pan_tilt_camera_node.cpp`는 카메라 설정, ROS 영상 발행, 팬틸트 제어를 담당한다.
+
+`test/`의 검사 코드는 검출·거리·메시지와 프레임 제한 동작을 확인한다.
+일반 카메라 프로그램 실행 중에는 검사 코드가 동작하지 않는다.

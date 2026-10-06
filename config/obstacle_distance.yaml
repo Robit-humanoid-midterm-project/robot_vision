@@ -8,6 +8,7 @@ obstacle_distance:
     viewer: true
     viewer_fullscreen: true
     show_preprocess: false
+    max_processing_fps: 30.0
 
     # 기존 캘리브레이션 (640×480, 임의 변경 금지)
     calibration_width: 640
