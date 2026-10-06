@@ -31,9 +31,9 @@ obstacle_distance:
     min_area_px: 500.0
 
     # 흰색 경계선 주변의 잔디색 판단 기준 (기존 코드 기본값)
-    lane_grass_hue_min: 30             # 색상 H 최소값 (0~179)
+    lane_grass_hue_min: 43            # 색상 H 최소값 (0~179)
     lane_grass_hue_max: 95             # 색상 H 최대값 (0~179)
-    lane_grass_min_saturation: 45      # 채도 S 최소값 (0~255)
+    lane_grass_min_saturation: 60    # 채도 S 최소값 (0~255)
     lane_min_grass_support: 0.80       # 선 안쪽의 잔디색 최소 비율 (0~1)
 
 camera_bev_preview:

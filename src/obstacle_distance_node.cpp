@@ -113,9 +113,9 @@ class ObstacleDistanceNode final : public rclcpp::Node
         // 흰색 경계선 검출의 색상·기울기·잔디 지지 조건을 설정한다.
         lane_config_.white_max_saturation = declare_parameter<int>("lane_white_max_saturation", 85, fixed);
         lane_config_.white_min_value = declare_parameter<int>("lane_white_min_value", 175, fixed);
-        lane_config_.grass_hue_min = declare_parameter<int>("lane_grass_hue_min", 30, fixed);
+        lane_config_.grass_hue_min = declare_parameter<int>("lane_grass_hue_min", 43, fixed);
         lane_config_.grass_hue_max = declare_parameter<int>("lane_grass_hue_max", 95, fixed);
-        lane_config_.grass_min_saturation = declare_parameter<int>("lane_grass_min_saturation", 45, fixed);
+        lane_config_.grass_min_saturation = declare_parameter<int>("lane_grass_min_saturation", 60, fixed);
         lane_config_.roi_top_fraction = declare_parameter<double>("lane_roi_top_fraction", 0.18, fixed);
         lane_config_.reference_y_fraction = declare_parameter<double>("lane_reference_y_fraction", 0.85, fixed);
         lane_config_.candidate_min_bottom_y_fraction =
@@ -126,7 +126,7 @@ class ObstacleDistanceNode final : public rclcpp::Node
             declare_parameter<double>("lane_min_observed_height_fraction", 0.18, fixed);
         lane_config_.max_fit_error_px = declare_parameter<double>("lane_max_fit_error_px", 8.0, fixed);
         lane_config_.group_tolerance_px = declare_parameter<double>("lane_group_tolerance_px", 18.0, fixed);
-        lane_config_.min_grass_support = declare_parameter<double>("lane_min_grass_support", 0.70, fixed);
+        lane_config_.min_grass_support = declare_parameter<double>("lane_min_grass_support", 0.80, fixed);
         lane_config_.bottom_outer_fraction = declare_parameter<double>("lane_bottom_outer_fraction", lane_config_.bottom_outer_fraction, fixed);
         calibration_verified_ = config.calibration_verified;
         // 행 추적은 최근 프레임 수와 위치·기울기 일치 기준으로 흔들림을 줄인다.
