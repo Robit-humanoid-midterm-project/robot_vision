@@ -160,21 +160,6 @@ g++ -std=c++17 src/capture_dataset.cpp -o capture_dataset $(pkg-config --cflags 
 | `bev_node.cpp` | 별도 BEV 보정·미리보기 도구 |
 | `capture_dataset.cpp` | 별도 원본·마스크 사진 저장 도구. 수동 빌드하며 YOLO 추론은 수행하지 않음 |
 
-`VisionFrameResult`는 장애물, 차선, 행, 거리 등 한 프레임의 계산 결과를 묶는다.
-화면 표시와 메시지 생성이 이 결과를 공유한다. 영상이 끊기면
-`VisionPipeline::reset_tracking()`으로 행 추적 이력을 초기화한다.
-
-`frame_rate_limiter.hpp`는 일정한 처리 시각을 기준으로 프레임을 선택한다.
-로봇용 결과는 화면 처리보다 먼저 발행하며, 디버그 영상은 구독자가 있을 때 발행한다.
-통합 화면 상단의 FPS와 5초마다 출력하는 로그는 프로그램 내부의 처리 속도다.
-
-통합 화면은 왼쪽 검출 결과, 오른쪽 위 마스크, 오른쪽 아래 원본 영상으로 구성한다.
-임시 3×3 배치 계산·화면 패널과 `/vision/slot_map` 토픽은 제거했다.
-차선·행 검출과 `vision2master`, `/vision/obstacles`, `/vision/lane_line`은 유지한다.
-좌우 경계 거리에는 기존의 경기장 폭 1.5m와 카메라 정렬 가정이 적용된다.
-
-카메라 패키지의 `usb_camera.cpp`는 장치 통신, 영상 수신·디코딩·축소를 담당한다.
-`pan_tilt_camera_node.cpp`는 카메라 설정, ROS 영상 발행, 팬틸트 제어를 담당한다.
 
 `test/`의 검사 코드는 검출·거리·메시지와 프레임 제한 동작을 확인한다.
 일반 카메라 프로그램 실행 중에는 검사 코드가 동작하지 않는다.
