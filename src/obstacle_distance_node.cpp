@@ -12,10 +12,12 @@
 
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 
 #include "humanoid_interfaces/msg/vision_data.hpp"
 #include "robot_vision/frame_rate_limiter.hpp"
@@ -149,8 +151,9 @@ class ObstacleDistanceNode final : public rclcpp::Node
         debug_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/obstacle_debug", image_qos);
         mask_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/obstacle_mask", image_qos);
         preprocess_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/obstacle_preprocess", image_qos);
-        image_sub_ = create_subscription<sensor_msgs::msg::Image>(
-            image_topic_, image_qos, [this](sensor_msgs::msg::Image::ConstSharedPtr image) { on_image(image); });
+        image_sub_ = create_subscription<sensor_msgs::msg::CompressedImage>(
+            image_topic_, image_qos,
+            [this](sensor_msgs::msg::CompressedImage::ConstSharedPtr image) { on_image(image); });
         // 200ms마다 영상 상태를 확인한다. 검출을 새로 수행하는 타이머는 아니다.
         watchdog_ = create_wall_timer(std::chrono::milliseconds(200), [this] { watchdog(); });
         RCLCPP_INFO(get_logger(), "Input: %s; outputs: /vision/obstacles, /vision/obstacle_debug",
@@ -234,7 +237,7 @@ class ObstacleDistanceNode final : public rclcpp::Node
 
     // 카메라 토픽에서 영상 한 장을 받을 때 실행하는 콜백이다.
     // 처리 시각에 맞는 프레임만 선택하고, 계산 결과를 제어 토픽과 디버그 화면으로 나눈다.
-    void on_image(const sensor_msgs::msg::Image::ConstSharedPtr &image)
+    void on_image(const sensor_msgs::msg::CompressedImage::ConstSharedPtr &image)
     {
         const auto now = SteadyClock::now();
         // 아직 다음 처리 시각 전이면 이 프레임을 건너뛴다. 뒤늦게 쌓인 프레임을 몰아서 처리하지 않는다.
@@ -244,8 +247,9 @@ class ObstacleDistanceNode final : public rclcpp::Node
         VisionFrameResult result;
         try
         {
-            // ROS 영상을 OpenCV의 BGR 영상으로 복사한 뒤 장애물 검출을 수행한다.
-            frame = cv_bridge::toCvCopy(image, sensor_msgs::image_encodings::BGR8)->image;
+            // Decode the transmitted JPEG only for frames selected for processing.
+            frame = cv::imdecode(image->data, cv::IMREAD_COLOR);
+            if (frame.empty()) throw std::runtime_error("Cannot decode camera JPEG");
             result = pipeline_->detect_obstacles(frame);
         }
         catch (const cv::Exception &error)
@@ -312,7 +316,7 @@ class ObstacleDistanceNode final : public rclcpp::Node
     rclcpp::Publisher<msg::LaneLine>::SharedPtr lane_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr lane_mask_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_, mask_pub_, preprocess_pub_;
-    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr image_sub_;
     rclcpp::TimerBase::SharedPtr watchdog_;
     bool have_image_{false}, have_empty_{false};
     SteadyClock::time_point last_received_{}, last_empty_{};

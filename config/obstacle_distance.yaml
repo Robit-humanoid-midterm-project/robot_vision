@@ -44,10 +44,21 @@ camera_bev_preview:
   ros__parameters:
     # 왜곡 보정 화면의 픽셀. 순서: 먼 왼쪽 → 먼 오른쪽 → 가까운 오른쪽 → 가까운 왼쪽.
     # [x1, y1, x2, y2, x3, y3, x4, y4]. []는 미선택. 클릭 후 S로 저장.
-    source_points: []
+    source_points: [180, 146, 421, 139, 577, 239, 4, 264]
     # 출력 [가로, 세로] 픽셀 크기.
     bev_size: [640, 480]
-    # 선택한 바닥 직사각형의 실측 가로/세로(m). 0.0은 아직 미입력.
-    # 이번 단계는 기록만 하며 미터 환산·각도 계산에 아직 사용하지 않습니다.
-    field_width_m: 0.0
-    field_height_m: 0.0
+    # BEV 흰 선 후보의 최소 밝기 V, 최대 채도 S (OpenCV HSV 범위).
+    line_white_min_value: 200
+    line_white_max_saturation: 85
+    # 선의 경기장 안쪽에 녹색 바닥이 있어야 하는 최소 비율.
+    line_min_grass_support: 0.75
+    # BEV 영상 좌우 끝에 대응하는 바닥의 실측 폭(m), 현재는 근삿값.
+    bev_width_m: 1.86
+    # 같은 전방 위치의 좌우 흰 선 사이 실측 거리(m).
+    field_width_m: 1.4
+    # 로봇 바닥 중심의 위치: 왼쪽 흰 선에서 0.7m.
+    robot_x_from_left_m: 0.7
+    # 로봇 바닥 기준점에서 앞으로 잰 가까운/먼 경계 거리(m).
+    # 두 경계 사이 길이는 3.75 - 1.5 = 2.25m.
+    near_edge_forward_m: 1.5
+    far_edge_forward_m: 3.75

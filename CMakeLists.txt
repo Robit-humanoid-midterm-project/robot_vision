@@ -16,7 +16,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
-find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d highgui imgcodecs)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d highgui imgcodecs videoio)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -49,11 +49,21 @@ ament_target_dependencies(obstacle_distance_node rclcpp sensor_msgs std_msgs cv_
 target_link_libraries(obstacle_distance_node vision_viewer vision_message_builder "${cpp_typesupport_target}" ${OpenCV_LIBRARIES})
 add_dependencies(obstacle_distance_node ${PROJECT_NAME})
 
-add_executable(bev_node src/bev_node.cpp)
-ament_target_dependencies(bev_node rclcpp sensor_msgs cv_bridge ament_index_cpp)
-target_link_libraries(bev_node ${OpenCV_LIBRARIES} yaml-cpp)
+add_library(bev_line_detector STATIC src/bev_line_detector.cpp)
+target_include_directories(bev_line_detector PUBLIC include ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(bev_line_detector PUBLIC ${OpenCV_LIBRARIES})
 
-install(TARGETS obstacle_distance_node bev_node DESTINATION lib/${PROJECT_NAME})
+add_executable(bev_node src/bev_node.cpp)
+target_include_directories(bev_node PRIVATE include ${OpenCV_INCLUDE_DIRS})
+ament_target_dependencies(bev_node rclcpp sensor_msgs cv_bridge ament_index_cpp)
+target_link_libraries(bev_node bev_line_detector ${OpenCV_LIBRARIES} yaml-cpp)
+
+add_executable(record_dataset src/record_dataset.cpp)
+target_include_directories(record_dataset PRIVATE ${OpenCV_INCLUDE_DIRS})
+ament_target_dependencies(record_dataset rclcpp sensor_msgs cv_bridge)
+target_link_libraries(record_dataset ${OpenCV_LIBRARIES})
+
+install(TARGETS obstacle_distance_node bev_node record_dataset DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
@@ -64,6 +74,8 @@ if(BUILD_TESTING)
   target_link_libraries(test_distance_estimator_cpp distance_estimator ${OpenCV_LIBRARIES})
   ament_add_gtest(test_vision_pipeline_cpp test/test_vision_pipeline.cpp)
   target_link_libraries(test_vision_pipeline_cpp vision_viewer vision_message_builder)
+  ament_add_gtest(test_bev_line_detector_cpp test/test_bev_line_detector.cpp)
+  target_link_libraries(test_bev_line_detector_cpp bev_line_detector)
 endif()
 
 ament_export_dependencies(rosidl_default_runtime)

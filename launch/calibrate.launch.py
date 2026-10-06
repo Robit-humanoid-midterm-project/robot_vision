@@ -45,8 +45,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('board_size', description='Measured internal corners: columns x rows, e.g. 8x6'),
         DeclareLaunchArgument('square_size', description='Measured square side in meters, e.g. 0.025 for 25 mm'),
-        DeclareLaunchArgument('image_topic', default_value='/camera1/camera/compressed_image',
-                              description='sensor_msgs/Image topic; current driver uses this name'),
+        DeclareLaunchArgument('image_topic', default_value='/camera1/camera/image_raw',
+                              description='sensor_msgs/Image topic for calibration'),
         DeclareLaunchArgument('start_camera', default_value='true',
                               description='Set false if the camera node is already running'),
         OpaqueFunction(function=calibration_actions),
