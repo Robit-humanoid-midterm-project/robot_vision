@@ -77,7 +77,7 @@ std::vector<VisibleEdge> find_complete_visible_edges(
     return edges;
   std::vector<cv::Point> polygon;
   // 작은 색상 잡음을 정리하되, 겹친 판 사이의 오목한 꺾임은 보존한다.
-  cv::approxPolyDP(contour, polygon, 2.0, true);
+  cv::approxPolyDP(contour, polygon, 4.0, true);
   if (polygon.size() < 4)
     return edges;
   const double orientation = cv::contourArea(polygon, true) > 0 ? 1.0 : -1.0;
