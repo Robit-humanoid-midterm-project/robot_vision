@@ -163,3 +163,6 @@ g++ -std=c++17 src/capture_dataset.cpp -o capture_dataset $(pkg-config --cflags 
 
 `test/`의 검사 코드는 검출·거리·메시지와 프레임 제한 동작을 확인한다.
 일반 카메라 프로그램 실행 중에는 검사 코드가 동작하지 않는다.
+
+yaml에 해당하는 값이 있으면 우선적으로 yaml에 있는 값이 적용되고 
+yaml에 존재하지 않는값은 obstacle_distance_node.cpp에 declare_parameter에 저장된다.

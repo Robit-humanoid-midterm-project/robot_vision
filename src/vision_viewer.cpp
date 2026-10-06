@@ -1,3 +1,6 @@
+// 파일 역할: 계산 결과를 사람이 확인할 수 있는 영상으로 그리고 OpenCV 창에 표시한다.
+// 왼쪽은 검출 결과, 오른쪽 위는 마스크, 오른쪽 아래는 원본 영상이다.
+
 #include "robot_vision/vision_viewer.hpp"
 
 #include <algorithm>
@@ -11,6 +14,7 @@
 namespace robot_vision {
 namespace {
 
+// 거리·품질 값을 소수 둘째 자리까지 표시할 문자열로 바꾼다.
 std::string two_decimals(double value)
 {
     std::ostringstream stream;
@@ -18,6 +22,7 @@ std::string two_decimals(double value)
     return stream.str();
 }
 
+// 좌우 부호를 명확히 보여 주도록 + 또는 -가 붙은 소수 둘째 자리 문자열을 만든다.
 std::string signed_two_decimals(double value)
 {
     std::ostringstream stream;
@@ -27,6 +32,7 @@ std::string signed_two_decimals(double value)
 
 // 판별로 네 값을 묶어 표시한다. 바닥/전방 값은 기존 바닥 투영 결과를 사용한다.
 // OpenCV 기본 글꼴은 한글을 지원하지 않아 화면에는 영문 항목명을 사용한다.
+// 판의 거리 라벨을 영상에 그린다. 겹치는 기존 라벨을 피하고 대상 판과 연결선을 만든다.
 void draw_distance_label(cv::Mat &canvas, const Detection &detection, const std::optional<GroundProjection> &ground,
                          std::vector<cv::Rect> &occupied)
 {
@@ -40,6 +46,7 @@ void draw_distance_label(cv::Mat &canvas, const Detection &detection, const std:
     }
     if (!std::isfinite(anchor.x) || !std::isfinite(anchor.y))
         return;
+    // Range는 직선거리, Ground는 바닥거리, Forward는 전방 성분, Lateral은 좌우 위치를 표시한다.
     const std::vector<std::string> lines{detection.color + (detection.color_split_estimate ? " (est.)" : ""),
                                          "Range: " + two_decimals(detection.distance_m) + " m",
                                          "Ground: " + (ground ? two_decimals(ground->radial_m) + " m" : "N/A"),
@@ -88,6 +95,7 @@ void draw_distance_label(cv::Mat &canvas, const Detection &detection, const std:
                     cv::FONT_HERSHEY_SIMPLEX, scale, color, 1, cv::LINE_AA);
 }
 
+// 경계 거리 계산의 성공·실패 상태를 화면 설명으로 바꾼다. 계산을 새로 수행하지 않는다.
 std::string crossing_note(const FieldGeometryResult &geometry, const std::string &side)
 {
     switch (geometry.status) {
@@ -109,12 +117,14 @@ std::string crossing_note(const FieldGeometryResult &geometry, const std::string
 
 } // namespace
 
+// 전처리 표시용 검출 설정과 창 사용·전체 화면 여부를 보관한다.
 VisionViewer::VisionViewer(DetectorConfig config, bool enabled, bool show_preprocess, bool fullscreen)
     : debug_config_(std::move(config)), viewer_(enabled), show_preprocess_(show_preprocess),
       viewer_fullscreen_(fullscreen)
 {
 }
 
+// 이 객체가 실제로 만든 창만 닫는다.
 VisionViewer::~VisionViewer()
 {
     if (window_initialized_)
@@ -123,11 +133,14 @@ VisionViewer::~VisionViewer()
         cv::destroyWindow(preprocess_window_name_);
 }
 
+// 원본을 복사해 차선·행·교차점·판 윤곽·거리와 상태 문구를 겹쳐 그린다.
+// 검출 입력 영상 자체는 수정하지 않고 표시용 복사본을 반환한다.
 cv::Mat VisionViewer::annotate(const cv::Mat &frame, const VisionFrameResult &frame_result) const
 {
     const auto &result = frame_result.obstacles;
     const auto &lane = frame_result.lane;
     const auto &row_lines = frame_result.rows;
+    // 표시 도형이 검출 결과나 원본 영상에 섞이지 않도록 독립된 복사본을 만든다.
     cv::Mat canvas = frame.clone();
     if (lane.best.valid) {
         const auto &line = lane.best;
@@ -148,6 +161,7 @@ cv::Mat VisionViewer::annotate(const cv::Mat &frame, const VisionFrameResult &fr
         const int ref_y = cvRound(line.reference_y_px);
         cv::circle(canvas, {cvRound(line.line_x_at_reference_px), ref_y}, 6, color, cv::FILLED, cv::LINE_AA);
     }
+    // 평활화한 행은 점선으로, 실제 관측한 밑변 조각은 실선으로 구분해 그린다.
     for (const auto &row : row_lines)
     {
         const cv::Point2d span = row.last - row.first;
@@ -178,6 +192,7 @@ cv::Mat VisionViewer::annotate(const cv::Mat &frame, const VisionFrameResult &fr
                      cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
     }
     // Draw observed color contours independently of metric pose acceptance.
+    // 거리 계산을 통과하지 못한 색상 후보도 윤곽은 표시한다. 거리 라벨은 확정된 검출에만 붙는다.
     for (const auto &candidate : result.image_candidates)
     {
         const cv::Scalar color = candidate.color == "red" ? cv::Scalar(0, 80, 255) : cv::Scalar(255, 180, 0);
@@ -209,6 +224,8 @@ cv::Mat VisionViewer::annotate(const cv::Mat &frame, const VisionFrameResult &fr
     return canvas;
 }
 
+// 세 영역의 영상을 하나의 통합 화면으로 구성한다.
+// 창 크기와 FPS 제목을 설정하고 F/ESC 키로 전체 화면을 전환한다.
 void VisionViewer::show_dashboard(const cv::Mat &raw, const cv::Mat &white_mask, const cv::Mat &obstacle_mask,
                     const cv::Mat &annotated)
 {
@@ -226,6 +243,7 @@ void VisionViewer::show_dashboard(const cv::Mat &raw, const cv::Mat &white_mask,
     // The header sits outside the image and does not cover its status banner.
     cv::Mat dashboard(626, 1200, CV_8UC3, cv::Scalar(18, 18, 18));
     cv::Mat large_annotated, small_raw, combined_mask;
+    // 검출 결과를 크게, 원본과 마스크를 작게 배치한다. 이 크기 변경은 화면 표시용이다.
     cv::resize(annotated, large_annotated, {800, 600}, 0, 0, cv::INTER_CUBIC);
     cv::resize(raw, small_raw, {400, 300}, 0, 0, cv::INTER_AREA);
     if (!obstacle_mask.empty() && obstacle_mask.type() == CV_8UC3 && obstacle_mask.size() == raw.size())
@@ -238,6 +256,7 @@ void VisionViewer::show_dashboard(const cv::Mat &raw, const cv::Mat &white_mask,
     }
     if (!white_mask.empty() && white_mask.type() == CV_8UC1 && white_mask.size() == raw.size())
     {
+        // 흰색 경계선 마스크를 색상 장애물 마스크 위에 흰색으로 겹쳐 표시한다.
         combined_mask.setTo(cv::Scalar::all(255), white_mask);
     }
     cv::resize(combined_mask, combined_mask, {400, 300}, 0, 0, cv::INTER_NEAREST);
@@ -254,6 +273,7 @@ void VisionViewer::show_dashboard(const cv::Mat &raw, const cv::Mat &white_mask,
     cv::rectangle(dashboard, {800, 326}, {990, 352}, cv::Scalar(20, 20, 20), cv::FILLED);
     label("RAW CAMERA", 800, 326);
     cv::imshow(window_name_, dashboard);
+    // OpenCV 창의 이벤트를 처리하고 키를 읽는다. 이 대기·표시 시간도 성능 로그에 포함된다.
     const int key = cv::waitKey(1) & 0xff;
     if (key == 'f' || key == 'F' || key == 27)
     {
@@ -265,6 +285,7 @@ void VisionViewer::show_dashboard(const cv::Mat &raw, const cv::Mat &white_mask,
     }
 }
 
+// 빨강·파랑 마스크의 잡음 제거 전후를 나란히 배치하고 HSV 기준·검출 통계를 표시한다.
 cv::Mat VisionViewer::preprocess_view(const DetectResult &result) const
 {
     cv::Mat canvas(610, 640, CV_8UC3, cv::Scalar(22, 22, 22));
@@ -282,6 +303,7 @@ cv::Mat VisionViewer::preprocess_view(const DetectResult &result) const
             "  S>= " + std::to_string(r.blue_lower[1]) + "  V>= " + std::to_string(r.blue_lower[2]),
         8, 39);
     put("White = selected pixels | RAW = HSV | CLEAN = open + close", 8, 62, 0.42);
+    // 색상 두 종류 각각에 원본 마스크와 정리된 마스크를 배치한다.
     for (int i = 0; i < 2; ++i)
     {
         const auto &color = result.colors[i];
@@ -320,6 +342,7 @@ cv::Mat VisionViewer::preprocess_view(const DetectResult &result) const
     return canvas;
 }
 
+// 영상이 없을 때 입력 토픽 이름과 안내 문구를 담은 검출 영역용 화면을 반환한다.
 cv::Mat VisionViewer::no_image_view(const std::string &image_topic) const
 {
     cv::Mat canvas(480, 640, CV_8UC3, cv::Scalar::all(0));
@@ -330,6 +353,7 @@ cv::Mat VisionViewer::no_image_view(const std::string &image_topic) const
     return canvas;
 }
 
+// 영상이 없을 때 사용할 전처리 안내 화면을 반환한다.
 cv::Mat VisionViewer::no_image_preprocess() const
 {
     cv::Mat preprocess(610, 640, CV_8UC3, cv::Scalar::all(0));
@@ -338,6 +362,7 @@ cv::Mat VisionViewer::no_image_preprocess() const
     return preprocess;
 }
 
+// 켜진 전처리 창과 통합 창을 갱신한다. 로컬 viewer가 꺼져 있으면 창을 표시하지 않는다.
 void VisionViewer::show(const cv::Mat &raw, const cv::Mat &white_mask, const cv::Mat &obstacle_mask,
                         const cv::Mat &annotated, const cv::Mat &preprocess)
 {

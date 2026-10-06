@@ -1,3 +1,6 @@
+// 파일 역할: 색상 후보를 실제 크기가 알려진 판으로 검사하고 카메라 기준 위치·거리를 구한다.
+// 전체 사각형, 영상 경계, 채도 분리, 온전한 한 변을 사용하며 계산 불가한 후보는 제외한다.
+
 #include "robot_vision/distance_estimator.hpp"
 
 #include <algorithm>
@@ -80,6 +83,7 @@ std::vector<VisibleEdge> find_complete_visible_edges(
   cv::approxPolyDP(contour, polygon, 3.0, true);
   if (polygon.size() < 4)
     return edges;
+  // 윤곽의 순회 방향을 이용해 안쪽 방향과 볼록·오목 모서리를 구분한다.
   const double orientation = cv::contourArea(polygon, true) > 0 ? 1.0 : -1.0;
   for (size_t i = 0; i < polygon.size(); ++i) {
     const cv::Point2d a = polygon[i], b = polygon[(i + 1) % polygon.size()];
@@ -106,6 +110,7 @@ std::vector<VisibleEdge> find_complete_visible_edges(
     if (on_border(a) || on_border(b))
       continue;
     const cv::Point2d inward = orientation * cv::Point2d(-edge.y, edge.x) / length;
+    // 변을 따라 여러 위치를 샘플링한다. 안쪽은 판 색상이고 바깥쪽은 배경이어야 경계로 인정한다.
     int support = 0;
     for (int sample = 1; sample < 10; ++sample) {
       const auto inside = a + edge * (sample / 10.0) + inward * 3.0;
@@ -200,6 +205,7 @@ DistanceEstimator::DistanceEstimator(DetectorConfig config) : config_(std::move(
       std::abs(config_.camera_matrix[8] - 1.0) > 1e-9) {
     throw std::invalid_argument("Invalid camera matrix");
   }
+  // OpenCV가 지원하는 왜곡 계수 개수와 유한한 값인지 검사한다.
   const auto n = config_.distortion_coefficients.size();
   if ((n != 4 && n != 5 && n != 8 && n != 12 && n != 14) ||
       std::find_if(config_.distortion_coefficients.begin(),
@@ -225,6 +231,7 @@ DistanceEstimator::DistanceEstimator(DetectorConfig config) : config_(std::move(
   validate_hsv(config_.red_lower_1, config_.red_upper_1);
   validate_hsv(config_.red_lower_2, config_.red_upper_2);
   validate_hsv(config_.blue_lower, config_.blue_upper);
+  // 설정 벡터를 행렬로 복사해 이후 PnP와 왜곡 보정에 사용한다.
   camera_matrix_ = cv::Mat(3, 3, CV_64F, config_.camera_matrix.data()).clone();
   distortion_ = cv::Mat(1, static_cast<int>(n), CV_64F,
                         config_.distortion_coefficients.data()).clone();
@@ -237,6 +244,7 @@ std::optional<Detection> DistanceEstimator::square_pose(
     const std::array<cv::Point2d, 4> &unordered_corners) const {
   const auto corners = order_quad(unordered_corners);
   const double s = config_.obstacle_size_m / 2.0;
+  // 실측 판을 중심이 원점인 3차원 정사각형으로 표현한다. 영상 꼭짓점과 같은 순서로 대응시킨다.
   const std::vector<cv::Point3d> object{{-s, s, 0}, {s, s, 0}, {s, -s, 0}, {-s, -s, 0}};
   const std::vector<cv::Point2d> image(corners.begin(), corners.end());
   std::vector<cv::Mat> rotations, translations;
@@ -400,6 +408,7 @@ std::optional<Detection> DistanceEstimator::pose_for_contour(
     }
     if (min_edge < config_.min_edge_px)
       continue;
+    // 영상에서 크게 보이는 가까운 판에는 별도의 형태 일치·재투영 오차 기준을 적용한다.
     const bool near_face = min_edge >= config_.near_min_edge_px;
     const double min_fill = near_face ? config_.near_min_fill_ratio :
                                         config_.min_fill_ratio;
@@ -524,6 +533,7 @@ std::optional<Detection> DistanceEstimator::line_pose_for_component(
   if (peak < config_.min_edge_px / 2.0)
     return std::nullopt;
 
+  // 색상 영역 주변만 잘라 직선을 검색한다. 주변 여백은 포함하되 영상 바깥으로 나가지 않게 자른다.
   const cv::Rect search = (cv::Rect(bounds.x - 12, bounds.y - 12,
                                     bounds.width + 24, bounds.height + 24) &
                            cv::Rect(0, 0, bgr.cols, bgr.rows));
@@ -534,6 +544,7 @@ std::optional<Detection> DistanceEstimator::line_pose_for_component(
   std::vector<cv::Vec4i> lines;
   const int minimum_line = std::max(30, static_cast<int>(0.20 * std::min(bounds.width,
       bounds.height)));
+  // 영상 경계에서 직선 후보를 추출한다. 이후 판의 위·아래·왼쪽·오른쪽 경계로 분류한다.
   cv::HoughLinesP(edges, lines, 1, CV_PI / 180.0, 30, minimum_line, 8);
 
 
@@ -596,6 +607,7 @@ std::optional<Detection> DistanceEstimator::line_pose_for_component(
   cv::fillConvexPoly(rectangle, polygon, cv::Scalar(255));
   cv::Mat color_inside;
   cv::bitwise_and(mask, rectangle, color_inside);
+  // 복원한 사각형 안을 판 색상이 충분히 채우는지 확인해 배경 선으로 만든 사각형을 제외한다.
   const double occupancy = static_cast<double>(cv::countNonZero(color_inside)) /
                            std::max(1, cv::countNonZero(rectangle));
   if (occupancy < 0.85)
@@ -758,6 +770,7 @@ DetectResult DistanceEstimator::detect(const cv::Mat &bgr) const {
       }
     }
   }
+  // 최종 검출 목록은 카메라에서 판 아래쪽 중심까지의 직선거리가 가까운 순서로 반환한다.
   std::sort(result.detections.begin(), result.detections.end(),
             [](const auto &a, const auto &b) { return a.distance_m < b.distance_m; });
   result.status = config_.calibration_verified ? "ok" : "unverified_calibration";

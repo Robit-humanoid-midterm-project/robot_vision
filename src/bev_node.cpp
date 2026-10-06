@@ -1,3 +1,6 @@
+// 파일 역할: 왜곡 보정 영상에서 바닥 네 점을 선택하고 위에서 보는 BEV 영상을 미리 확인한다.
+// 실측 경기장 좌표나 로봇 제어 토픽을 계산하는 도구는 아니다.
+
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -22,6 +25,7 @@ namespace fs = std::filesystem;
 constexpr char kWindow[] = "Undistorted - select 4 points";
 constexpr char kBevWindow[] = "BEV - pixels only";
 
+// YAML 배열의 길이와 유한한 숫자인지 검사하고 double 목록으로 반환한다.
 std::vector<double> read_numbers(const YAML::Node &node, std::size_t expected, const char *name) {
   if (!node || !node.IsSequence() || node.size() != expected) {
     throw std::runtime_error(std::string(name) + " has the wrong number of values");
@@ -37,6 +41,8 @@ std::vector<double> read_numbers(const YAML::Node &node, std::size_t expected, c
 
 class BevPreview {
  public:
+  // 설정 파일에서 영상 크기·보정값·BEV 크기를 읽고 왜곡 보정 맵을 한 번 만든다.
+  // 저장된 네 점이 있으면 변환 행렬도 만들고 클릭 콜백을 창에 연결한다.
   explicit BevPreview(fs::path config_path) : config_path_(fs::absolute(std::move(config_path))) {
     const YAML::Node root = YAML::LoadFile(config_path_.string());
     const auto camera = root["obstacle_distance"]["ros__parameters"];
@@ -53,6 +59,7 @@ class BevPreview {
     const auto distortion = read_numbers(camera["distortion_coefficients"], 5, "distortion_coefficients");
     cv::Mat k(3, 3, CV_64F, const_cast<double *>(intrinsics.data()));
     cv::Mat d(1, 5, CV_64F, const_cast<double *>(distortion.data()));
+    // 같은 카메라 보정값을 반복 사용하므로 픽셀 이동 맵을 미리 계산해 매 프레임의 작업을 줄인다.
     cv::initUndistortRectifyMap(k, d, cv::Mat(), k, size_, CV_32FC1, map_x_, map_y_);
     const auto stored = bev["source_points"];
     if (!stored || !stored.IsSequence() || (stored.size() != 0 && stored.size() != 8)) {
@@ -67,8 +74,10 @@ class BevPreview {
     cv::setMouseCallback(kWindow, &BevPreview::mouse_callback, this);
   }
 
+  // 설정에서 읽은 카메라 입력 토픽 이름을 반환한다.
   const std::string &topic() const { return image_topic_; }
 
+  // 입력 크기를 보정 기준과 비교하고, 점 선택으로 멈춘 상태가 아니면 왜곡 보정 영상을 갱신한다.
   void receive(const cv::Mat &raw) {
     if (raw.size() != size_) {
       throw std::runtime_error("Camera image size differs from calibration_width/calibration_height");
@@ -76,6 +85,8 @@ class BevPreview {
     if (!frozen_) cv::remap(raw, undistorted_, map_x_, map_y_, cv::INTER_LINEAR);
   }
 
+  // 선택한 점·좌표와 BEV 미리보기를 표시하고 키 입력을 처리한다.
+  // S는 저장 후 실시간 복귀, R은 재선택, Q/ESC는 종료를 의미한다.
   bool draw() {
     if (!undistorted_.empty()) {
       cv::Mat display = undistorted_.clone();
@@ -93,6 +104,7 @@ class BevPreview {
       cv::imshow(kWindow, display);
       if (!homography_.empty()) {
         cv::Mat bird_view;
+        // 왜곡 보정된 영상을 선택한 바닥 사각형 기준으로 위에서 보는 형태로 변환한다.
         cv::warpPerspective(undistorted_, bird_view, homography_, bev_size_);
         cv::imshow(kBevWindow, bird_view);
       }
@@ -114,10 +126,13 @@ class BevPreview {
   }
 
  private:
+  // OpenCV의 마우스 이벤트를 해당 BevPreview 객체의 click() 호출로 전달한다.
   static void mouse_callback(int event, int x, int y, int, void *self) {
     if (event == cv::EVENT_LBUTTONDOWN) static_cast<BevPreview *>(self)->click(x, y);
   }
 
+  // 먼 왼쪽 → 먼 오른쪽 → 가까운 오른쪽 → 가까운 왼쪽 순서의 네 점을 기록한다.
+  // 첫 클릭부터 영상을 멈춰 네 점이 모두 같은 프레임에서 선택되게 한다.
   void click(int x, int y) {
     if (undistorted_.empty() || points_.size() >= 4 || x < 0 || y < 0 ||
         x >= size_.width || y >= size_.height) return;
@@ -130,6 +145,7 @@ class BevPreview {
     }
   }
 
+  // 유효한 볼록 사각형의 네 점을 BEV 출력 사각형으로 대응시켜 원근 변환 행렬을 만든다.
   void update_homography() {
     if (points_.size() != 4) return;
     for (const auto &p : points_) {
@@ -144,6 +160,8 @@ class BevPreview {
     homography_ = cv::getPerspectiveTransform(points_, destination);
   }
 
+  // YAML의 BEV source_points 값만 바꾸고 나머지 설정과 주석은 보존한다.
+  // 임시 파일에 완전히 쓴 뒤 원본을 교체해 저장 중 실패에 대비한다.
   void save_points() const {
     // Only replace the value on the source_points line; preserve all other YAML and comments.
     std::ifstream input(config_path_);
@@ -168,6 +186,7 @@ class BevPreview {
       document += line + '\n';
     }
     if (!replaced) throw std::runtime_error("source_points line not found in BEV YAML section");
+    // 다른 YAML 값은 건드리지 않고 완성된 내용만 마지막에 파일 이름 변경으로 반영한다.
     const auto temporary = fs::path(config_path_.string() + ".tmp");
     try {
       std::ofstream output(temporary, std::ios::trunc);
@@ -192,6 +211,7 @@ class BevPreview {
 };
 }  // namespace
 
+// 저장 이미지(--image) 또는 ROS 카메라 영상 중 입력 방식을 선택해 미리보기를 실행한다.
 int main(int argc, char **argv) {
   try {
     fs::path config = fs::path(ament_index_cpp::get_package_share_directory("robot_vision")) /
@@ -205,6 +225,7 @@ int main(int argc, char **argv) {
       else ros_args.push_back(argv[i]);
     }
     BevPreview preview(config);
+    // 저장 이미지 모드는 ROS 영상 수신 없이 파일 한 장으로 점 선택을 수행한다.
     if (!image_file.empty()) {
       const cv::Mat image = cv::imread(image_file);
       if (image.empty()) throw std::runtime_error("Cannot read camera image: " + image_file);
@@ -214,6 +235,7 @@ int main(int argc, char **argv) {
       int ros_argc = static_cast<int>(ros_args.size());
       rclcpp::init(ros_argc, ros_args.data());
       auto node = std::make_shared<rclcpp::Node>("camera_bev_preview");
+      // 실시간 모드에서는 최신 한 프레임만 받아 OpenCV 영상으로 변환한다.
       auto subscription = node->create_subscription<sensor_msgs::msg::Image>(
         preview.topic(), rclcpp::SensorDataQoS().keep_last(1),
         [&preview](const sensor_msgs::msg::Image::ConstSharedPtr msg) {

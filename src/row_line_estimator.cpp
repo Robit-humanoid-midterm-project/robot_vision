@@ -1,3 +1,6 @@
+// 파일 역할: 장애물 판의 밑변·색상 하단 경계에서 행 기준선을 찾고 프레임 사이 흔들림을 줄인다.
+// 3×3 배치를 만들지 않으며, 행은 경계 거리 계산과 선 표시의 기준으로 사용한다.
+
 #include "robot_vision/row_line_estimator.hpp"
 
 #include <algorithm>
@@ -21,6 +24,8 @@ struct Candidate {
   double weight;
 };
 
+// 길이와 기울기 조건을 통과한 선분을 행 후보로 추가한다.
+// 판의 사각형 밑변은 마스크만으로 찾은 경계보다 큰 가중치를 준다.
 void append_candidate(std::vector<Candidate> &out, const cv::Point2f &a,
                       const cv::Point2f &b, bool from_square, double center_x) {
   const double dx = b.x - a.x;
@@ -32,6 +37,7 @@ void append_candidate(std::vector<Candidate> &out, const cv::Point2f &a,
   out.push_back({{a, b, from_square}, slope, center_y, weight});
 }
 
+// 선분 위는 판 색상이고 아래는 배경인 위치가 충분한지 검사해 판의 하단 경계를 고른다.
 bool color_above_background_below(const cv::Mat &component,
                                   const cv::Point2f &a,
                                   const cv::Point2f &b) {
@@ -53,6 +59,8 @@ bool color_above_background_below(const cv::Mat &component,
 
 }  // namespace
 
+// 검출 판의 밑변과 색상 마스크 하단 선분을 모아 비슷한 높이·기울기끼리 묶는다.
+// 중복을 제외하고 지지가 높은 행 최대 세 개를 영상 위쪽부터 반환한다.
 std::vector<RowLine> estimate_row_lines(
     const std::array<ColorDebug, 2> &colors,
     const std::vector<Detection> &detections,
@@ -60,10 +68,12 @@ std::vector<RowLine> estimate_row_lines(
   if (image_size.width <= 0 || image_size.height <= 0) return {};
   std::vector<Candidate> candidates;
   const double center_x = (image_size.width - 1) * 0.5;
+  // 거리 검출을 통과한 판의 아래쪽 두 꼭짓점으로 신뢰도가 높은 선분을 먼저 만든다.
   for (const auto &detection : detections) {
     append_candidate(candidates, detection.corners[3], detection.corners[2],
                      true, center_x);
   }
+  // 거리 계산에 실패한 판도 색상 마스크 하단이 보이면 행 후보로 사용할 수 있다.
   for (const auto &color : colors) {
     const cv::Mat &mask = color.cleaned_mask;
     if (mask.empty() || mask.size() != image_size) continue;
@@ -98,6 +108,7 @@ std::vector<RowLine> estimate_row_lines(
     }
   }
 
+  // 영상 중앙에서의 y 높이로 후보를 정렬한다. 이어지는 묶기는 높이와 기울기를 함께 비교한다.
   std::sort(candidates.begin(), candidates.end(),
             [](const Candidate &a, const Candidate &b) {
               return a.center_y < b.center_y;
@@ -151,6 +162,7 @@ std::vector<RowLine> estimate_row_lines(
     for (const auto &segment : group.observed)
       visible_length += cv::norm(segment.last - segment.first);
     // A detected square base is stronger evidence than a mask-only edge.
+    // 실제 판 밑변의 지지 수와 관측 선분 길이로 행 후보의 우선순위를 정한다.
     const double score = 200.0 * group.square_support + visible_length;
     ranked.push_back({{first, last, group.observed, group.square_support},
                       y, slope, score});
@@ -181,6 +193,7 @@ std::vector<RowLine> estimate_row_lines(
   return result;
 }
 
+// 행 추적 이력 길이, 위치·기울기 대응 허용치와 미검출 유지 프레임 수를 설정한다.
 RowLineTracker::RowLineTracker(int history_frames, double match_y_px,
                                double match_slope, int max_missing_frames)
     : history_frames_(history_frames), max_missing_frames_(max_missing_frames),
@@ -190,15 +203,19 @@ RowLineTracker::RowLineTracker(int history_frames, double match_y_px,
     throw std::invalid_argument("Invalid row smoothing parameters");
 }
 
+// 행 추적 목록과 이전 영상 크기를 초기화한다.
 void RowLineTracker::reset() {
   tracks_.clear();
   previous_size_ = {};
 }
 
+// 현재 행을 기존 추적과 연결하고 최근 위치·기울기를 평균낸다.
+// 현재 영상에 보이지 않는 행은 출력하지 않으며, 오래 사라진 추적은 삭제한다.
 std::vector<RowLine> RowLineTracker::smooth(const std::vector<RowLine> &rows,
                                            const cv::Size &image_size) {
   if (image_size.width <= 0 || image_size.height <= 0)
     throw std::invalid_argument("Invalid row image size");
+  // 영상 크기가 바뀌면 픽셀 좌표의 의미가 달라지므로 이전 추적을 버린다.
   if (previous_size_ != image_size) reset();
   previous_size_ = image_size;
   for (auto &track : tracks_) ++track.missing_frames;
@@ -213,6 +230,7 @@ std::vector<RowLine> RowLineTracker::smooth(const std::vector<RowLine> &rows,
     const double y = row.first.y + slope * (center_x - row.first.x);
     size_t match = tracks_.size();
     double best_cost = std::numeric_limits<double>::infinity();
+    // 이번 프레임에서 아직 사용하지 않은 추적 중 위치·기울기가 가장 가까운 항목을 찾는다.
     for (size_t i = 0; i < tracks_.size(); ++i) {
       if (used[i] || tracks_[i].samples.empty() ||
           tracks_[i].missing_frames > max_missing_frames_ + 1) continue;
@@ -241,6 +259,7 @@ std::vector<RowLine> RowLineTracker::smooth(const std::vector<RowLine> &rows,
     auto &track = tracks_[match];
     track.missing_frames = 0;
     track.samples.emplace_back(y, slope);
+    // 설정한 최근 프레임 수만 보관한다. 고정 시간 길이가 아니므로 FPS가 높으면 평균 구간의 시간은 짧아진다.
     while (track.samples.size() > static_cast<size_t>(history_frames_))
       track.samples.pop_front();
     double mean_y = 0, mean_slope = 0;
@@ -255,6 +274,7 @@ std::vector<RowLine> RowLineTracker::smooth(const std::vector<RowLine> &rows,
                      cvRound(mean_y + mean_slope * (image_size.width - 1 - center_x))};
     if (cv::clipLine(frame, smoothed.first, smoothed.last)) output.push_back(std::move(smoothed));
   }
+  // 허용한 미검출 프레임 수를 넘긴 추적을 삭제해 오래된 행이 계속 남지 않게 한다.
   tracks_.erase(std::remove_if(tracks_.begin(), tracks_.end(),
               [&](const Track &track) {
                 return track.missing_frames > max_missing_frames_;

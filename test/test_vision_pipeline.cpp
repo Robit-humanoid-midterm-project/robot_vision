@@ -1,3 +1,6 @@
+// 파일 역할: 합성 영상·지정 결과·선택적 참조 이미지로 예상 동작을 검사한다.
+// 실제 로봇을 움직이는 코드가 아니며, 일반 카메라 실행 중에는 이 테스트가 동작하지 않는다.
+
 #include <limits>
 
 #include <gtest/gtest.h>
@@ -11,6 +14,7 @@
 namespace {
 using namespace robot_vision;
 
+// 왜곡이 없는 간단한 카메라 행렬을 만들어 예상 거리 값을 손으로 계산할 수 있게 한다.
 DetectorConfig simple_camera()
 {
     DetectorConfig config;
@@ -19,6 +23,7 @@ DetectorConfig simple_camera()
     return config;
 }
 
+// 지정된 행 높이와 깊이를 가진 가상의 장애물을 만들어 관계 계산을 검사한다.
 Detection obstacle_at_row(double row_y, double depth)
 {
     Detection obstacle;
@@ -28,6 +33,7 @@ Detection obstacle_at_row(double row_y, double depth)
     return obstacle;
 }
 
+// 고정된 두 영상 점을 잇는 왼쪽 경계선 검출 결과를 만든다.
 LaneResult left_lane()
 {
     LaneResult lane;
@@ -38,6 +44,7 @@ LaneResult left_lane()
     return lane;
 }
 
+// 33ms 입력 간격에서 30/15FPS 제한이 불필요하게 절반으로 떨어지지 않는지 확인한다.
 TEST(FrameRateLimiter, KeepsRateWhenInputIsCloseToProcessingPeriod)
 {
     FrameRateLimiter limiter(30);
@@ -54,6 +61,7 @@ TEST(FrameRateLimiter, KeepsRateWhenInputIsCloseToProcessingPeriod)
     EXPECT_LE(accepted, 150);
 }
 
+// 긴 입력 공백 뒤 연속 따라잡기 처리가 없고 초기화·잘못된 FPS 검사가 동작하는지 확인한다.
 TEST(FrameRateLimiter, DoesNotBurstAfterPauseAndResetsCleanly)
 {
     FrameRateLimiter limiter(30);
@@ -68,6 +76,7 @@ TEST(FrameRateLimiter, DoesNotBurstAfterPauseAndResetsCleanly)
     EXPECT_THROW(FrameRateLimiter(std::numeric_limits<double>::infinity()), std::invalid_argument);
 }
 
+// 가장 앞쪽 행과 그 행에 속한 깊이 중앙값으로 좌우 경계 거리를 계산하는지 확인한다.
 TEST(FieldGeometry, UsesNearestRowAndMedianDepthForBoundaryDistance)
 {
     DetectResult obstacles;
@@ -83,6 +92,7 @@ TEST(FieldGeometry, UsesNearestRowAndMedianDepthForBoundaryDistance)
     EXPECT_NEAR(result.left_distance_m + result.right_distance_m, 1.5, 1e-9);
 }
 
+// 행 깊이가 없거나 경기장 폭 가정을 벗어나면 경계 거리를 미측정으로 남기는지 확인한다.
 TEST(FieldGeometry, KeepsUnknownDistancesWithoutDepthOrOutsideWidth)
 {
     const std::vector<RowLine> rows{{{0, 350}, {639, 350}}};
@@ -97,6 +107,7 @@ TEST(FieldGeometry, KeepsUnknownDistancesWithoutDepthOrOutsideWidth)
     EXPECT_EQ(outside.right_distance_m, -1000);
 }
 
+// 전방 1.5m 미만의 유효한 장애물 중 가까운 세 개를 선택하고 끊김이면 -1000을 보내는지 확인한다.
 TEST(VisionMessages, SelectsThreeNearestValidObstaclesAndUsesUnknownOnTimeout)
 {
     msg::ObstacleArray array;
@@ -127,6 +138,7 @@ TEST(VisionMessages, SelectsThreeNearestValidObstaclesAndUsesUnknownOnTimeout)
     EXPECT_EQ(timeout.obstacle_3, timeout.obstacle_1);
 }
 
+// 보정 해상도가 달라도 색상 후보·디버그 화면은 유지하고 실제 거리 검출만 생략하는지 확인한다.
 TEST(VisionPipeline, SizeMismatchStillProducesCandidatesAndDebugImages)
 {
     VisionPipeline pipeline(DetectorConfig{}, LaneConfig{}, 0.61);
@@ -143,6 +155,7 @@ TEST(VisionPipeline, SizeMismatchStillProducesCandidatesAndDebugImages)
     EXPECT_EQ(viewer.preprocess_view(result.obstacles).size(), cv::Size(640, 610));
 }
 
+// 끊김 초기화 후 새 행 위치에 이전 평활화 이력이 섞이지 않는지 확인한다.
 TEST(VisionPipeline, ResetDropsPreviousRowSmoothingHistory)
 {
     VisionPipeline pipeline(DetectorConfig{}, LaneConfig{}, 0.61);

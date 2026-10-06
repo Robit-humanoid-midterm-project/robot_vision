@@ -1,9 +1,14 @@
+// 파일 역할: 카메라 원본과 빨강·파랑 마스크를 사진으로 함께 저장하는 독립 프로그램.
+// ROS 노드와 YOLO 추론은 사용하지 않으며, 현재 카메라 장치는 /dev/video4로 지정되어 있다.
+
 #include <opencv2/opencv.hpp>
 #include <iostream>
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
 
+// 카메라를 열어 두 영상을 표시하고 스페이스 키로 한 쌍의 PNG를 저장한다.
+// ESC를 누르면 카메라와 창을 정리하고 종료한다.
 int main()
 {
     // 저장 폴더 생성
@@ -26,6 +31,7 @@ int main()
     );
 
     // Insta360 Link native 해상도 설정
+    // 장치에는 1280×960, 30FPS를 요청하고 이후 실제 적용값을 출력한다. 요청값과 실제 수신 FPS는 다를 수 있다.
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 960);
     cap.set(cv::CAP_PROP_FPS, 30);
@@ -60,6 +66,7 @@ int main()
         }
 
         // 1280x960 -> 640x480
+        // 저장·색상 검출용 영상을 보정 기준과 같은 640×480 크기로 축소한다.
         cv::resize(
             frame,
             frame640,
@@ -84,10 +91,12 @@ int main()
         int key = cv::waitKey(1);
 
         // SPACE를 누르면 이미지 저장
+        // 스페이스 키를 누른 시점의 원본과 마스크를 같은 파일 번호로 저장한다.
         if (key == 32)
         {
             std::string stem;
             // 프로그램을 다시 실행해도 기존 사진을 덮어쓰지 않는다.
+            // 이미 존재하는 파일 번호는 건너뛰어 이전 촬영 결과를 덮어쓰지 않는다.
             do
             {
                 std::ostringstream name;

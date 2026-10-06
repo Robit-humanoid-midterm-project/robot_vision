@@ -1,3 +1,6 @@
+// 파일 역할: 합성 영상·지정 결과·선택적 참조 이미지로 예상 동작을 검사한다.
+// 실제 로봇을 움직이는 코드가 아니며, 일반 카메라 실행 중에는 이 테스트가 동작하지 않는다.
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -19,6 +22,7 @@ namespace {
 using robot_vision::DetectorConfig;
 using robot_vision::DistanceEstimator;
 
+// 실측 크기의 판을 지정한 3차원 위치에서 카메라 영상으로 투영해 검사용 윤곽을 만든다.
 std::vector<cv::Point> projected_square(const DetectorConfig &config, const cv::Vec3d &xyz) {
   const double s = config.obstacle_size_m / 2.0;
   std::vector<cv::Point3d> object{{-s, s, 0}, {s, s, 0}, {s, -s, 0}, {-s, -s, 0}};
@@ -33,6 +37,7 @@ std::vector<cv::Point> projected_square(const DetectorConfig &config, const cv::
   return pixels;
 }
 
+// 검사용 HSV 색상을 OpenCV BGR 색으로 변환한다. 채도만 바꾼 판의 분리 검사를 준비한다.
 cv::Scalar hsv_to_bgr(int saturation) {
   cv::Mat hsv(1, 1, CV_8UC3, cv::Scalar(109, saturation, 210));
   cv::Mat bgr;
@@ -41,6 +46,7 @@ cv::Scalar hsv_to_bgr(int saturation) {
   return cv::Scalar(pixel[0], pixel[1], pixel[2]);
 }
 
+// 합성 잔디 영상의 흰 직선에서 경계선 하나와 중앙 픽셀 간격을 얻는지 확인한다.
 TEST(LaneLineCpp, SelectsOneStraightBoundaryAndPixelGap) {
   cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
   cv::line(image, {300, 110}, {100, 479}, cv::Scalar::all(255), 7);
@@ -53,6 +59,7 @@ TEST(LaneLineCpp, SelectsOneStraightBoundaryAndPixelGap) {
   EXPECT_GT(result.best.pixel_separation_px, 100);
 }
 
+// 영상 위쪽의 선반 같은 선을 제외하고 아래쪽 바닥 경계선을 고르는지 확인한다.
 TEST(LaneLineCpp, IgnoresUpperShelfLineAndKeepsLowerBoundary) {
   cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
   cv::line(image, {100, 90}, {350, 290}, cv::Scalar::all(255), 8);
@@ -64,6 +71,7 @@ TEST(LaneLineCpp, IgnoresUpperShelfLineAndKeepsLowerBoundary) {
   EXPECT_LT(result.best.bottom.x, 75);
 }
 
+// 반원 모양의 흰 선만 있는 경우 유효한 직선 경계선으로 인정하지 않는지 확인한다.
 TEST(LaneLineCpp, RejectsSemicircleWithoutStraightBoundary) {
   cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
   cv::ellipse(image, {320, 310}, {140, 130}, 0, 0, 180,
@@ -71,12 +79,14 @@ TEST(LaneLineCpp, RejectsSemicircleWithoutStraightBoundary) {
   EXPECT_FALSE(robot_vision::estimate_lane_line(image, {}).best.valid);
 }
 
+// 주변 잔디색의 지지가 없는 흰 배경을 바닥 경계선으로 오인하지 않는지 확인한다.
 TEST(LaneLineCpp, RejectsWhiteBackgroundWithoutGrass) {
   cv::Mat image(480, 640, CV_8UC3, cv::Scalar::all(90));
   cv::line(image, {300, 110}, {100, 479}, cv::Scalar::all(255), 7);
   EXPECT_FALSE(robot_vision::estimate_lane_line(image, {}).best.valid);
 }
 
+// 참조 이미지가 준비된 경우 실제 장면의 경계선 결과를 확인한다. 파일이 없으면 건너뛴다.
 TEST(LaneLineCpp, ReferenceImageWhenAvailable) {
   const char *path = std::getenv("ROBOT_VISION_SINGLE_LANE_IMAGE");
   if (!path) GTEST_SKIP() << "No reference image supplied";
@@ -98,6 +108,7 @@ TEST(LaneLineCpp, ReferenceImageWhenAvailable) {
   }
 }
 
+// 판 하단의 일부 선분이 보이면 그 기준선을 영상 폭으로 연장할 수 있는지 확인한다.
 TEST(DistanceEstimatorCpp, ExtendsExposedLowerEdgeThroughPartialOcclusion) {
   std::array<robot_vision::ColorDebug, 2> colors;
   colors[0].cleaned_mask = cv::Mat::zeros(480, 640, CV_8UC1);
@@ -112,6 +123,7 @@ TEST(DistanceEstimatorCpp, ExtendsExposedLowerEdgeThroughPartialOcclusion) {
   EXPECT_EQ(rows[0].last.x, 639);
 }
 
+// 같은 높이의 두 판 밑변을 하나의 행으로 묶는지 확인한다.
 TEST(DistanceEstimatorCpp, MergesTwoVisibleBasesOnSameRow) {
   std::array<robot_vision::ColorDebug, 2> colors;
   colors[0].cleaned_mask = cv::Mat::zeros(480, 640, CV_8UC1);
@@ -124,6 +136,7 @@ TEST(DistanceEstimatorCpp, MergesTwoVisibleBasesOnSameRow) {
   EXPECT_NEAR(rows[0].first.y, 330, 5);
 }
 
+// 여러 색상 경계가 있어도 출력 행을 최대 세 개로 제한하는지 확인한다.
 TEST(DistanceEstimatorCpp, LimitsRandomColorRowsToThree) {
   std::array<robot_vision::ColorDebug, 2> colors;
   for (auto &color : colors)
@@ -137,6 +150,7 @@ TEST(DistanceEstimatorCpp, LimitsRandomColorRowsToThree) {
   for (const auto &row : rows) EXPECT_FALSE(row.observed.empty());
 }
 
+// 같은 행 위치는 평균내고 현재 보이지 않는 행은 출력하지 않는지 확인한다.
 TEST(DistanceEstimatorCpp, AveragesMatchingRowButDoesNotDrawMissingRow) {
   robot_vision::RowLineTracker tracker(3, 35.0, 0.18, 3);
   auto make_row = [](int y) {
@@ -157,6 +171,7 @@ TEST(DistanceEstimatorCpp, AveragesMatchingRowButDoesNotDrawMissingRow) {
   EXPECT_EQ(unrelated[0].first.y, 350);
 }
 
+// 직선거리와 카메라 높이로 바닥거리·전방거리·좌우 성분을 구분하는지 확인한다.
 TEST(DistanceEstimatorCpp, GroundProjectionSeparatesForwardAndLateral) {
   robot_vision::Detection detection;
   detection.position = {0.4, 0.75, 2.0};
@@ -169,6 +184,7 @@ TEST(DistanceEstimatorCpp, GroundProjectionSeparatesForwardAndLateral) {
   EXPECT_FALSE(robot_vision::project_to_ground(detection, 3.0).has_value());
 }
 
+// 판 중심이 아닌 판 아래쪽 중심을 위치·직선거리의 기준점으로 사용하는지 확인한다.
 TEST(DistanceEstimatorCpp, BottomEdgeMidpointIsRangeTarget) {
   DetectorConfig config;
   DistanceEstimator estimator(config);
@@ -183,6 +199,7 @@ TEST(DistanceEstimatorCpp, BottomEdgeMidpointIsRangeTarget) {
   EXPECT_NEAR(detection->distance_m, std::hypot(2.0, 0.2), 0.02);
 }
 
+// 알려진 위치에 투영한 빨강·파랑 판을 검출하고 예상 거리에 맞는지 확인한다.
 TEST(DistanceEstimatorCpp, DetectsBothColorsAndKnownRange) {
   DetectorConfig config;
   DistanceEstimator estimator(config);
@@ -206,6 +223,7 @@ TEST(DistanceEstimatorCpp, DetectsBothColorsAndKnownRange) {
   }
 }
 
+// 가까워서 영상에 크게 보이는 온전한 정사각형 판도 검출하는지 확인한다.
 TEST(DistanceEstimatorCpp, DetectsLargeFullyVisibleSquare) {
   DetectorConfig config;
   DistanceEstimator estimator(config);
@@ -225,6 +243,7 @@ TEST(DistanceEstimatorCpp, DetectsLargeFullyVisibleSquare) {
   }
 }
 
+// 서로 붙은 파란 판들을 복구할 수 있는지 확인한다.
 TEST(DistanceEstimatorCpp, SeparatesTouchingBlueSquares) {
   DetectorConfig config;
   DistanceEstimator estimator(config);
@@ -238,6 +257,7 @@ TEST(DistanceEstimatorCpp, SeparatesTouchingBlueSquares) {
   EXPECT_NEAR(front->distance_m, std::sqrt(1.46), 0.1);
 }
 
+// 서로 붙은 빨간 판들을 복구할 수 있는지 확인한다.
 TEST(DistanceEstimatorCpp, SeparatesTouchingRedSquares) {
   DetectorConfig config;
   DistanceEstimator estimator(config);
@@ -253,6 +273,7 @@ TEST(DistanceEstimatorCpp, SeparatesTouchingRedSquares) {
   EXPECT_NEAR(front->distance_m, std::sqrt(1.46), 0.2);
 }
 
+// 깊이가 다른 빨간 판들을 하나의 큰 사각형으로 잘못 묶지 않는지 확인한다.
 TEST(DistanceEstimatorCpp, RejectsBoxSpanningNearAndFarRedPlates) {
   DetectorConfig config;
   DistanceEstimator estimator(config);
@@ -282,6 +303,7 @@ TEST(DistanceEstimatorCpp, RejectsBoxSpanningNearAndFarRedPlates) {
   }
 }
 
+// 판이 가려져도 온전한 위쪽 변으로 거리를 추정하는지 확인한다.
 TEST(DistanceEstimatorCpp, EstimatesRangeFromOccludedSquareTopEdge) {
   DetectorConfig config;
   DistanceEstimator estimator(config);
@@ -298,6 +320,7 @@ TEST(DistanceEstimatorCpp, EstimatesRangeFromOccludedSquareTopEdge) {
   EXPECT_TRUE(result.detections[0].color_split_estimate);
 }
 
+// 불완전한 형태와 보정 해상도 불일치에서 부적절한 거리 검출을 제외하는지 확인한다.
 TEST(DistanceEstimatorCpp, RejectsIncompleteShapesAndWrongResolution) {
   DistanceEstimator estimator(DetectorConfig{});
   cv::Mat image(480, 640, CV_8UC3, cv::Scalar::all(0));
@@ -310,6 +333,7 @@ TEST(DistanceEstimatorCpp, RejectsIncompleteShapesAndWrongResolution) {
             "image_size_mismatch");
 }
 
+// 참조 화면 이미지가 있을 때 판 검출 결과를 확인한다. 파일이 없으면 건너뛴다.
 TEST(DistanceEstimatorCpp, ReferenceScreenshotWhenAvailable) {
   const char *path = std::getenv("ROBOT_VISION_REFERENCE_IMAGE");
   if (path == nullptr) GTEST_SKIP() << "No local screenshot supplied";
@@ -329,6 +353,7 @@ TEST(DistanceEstimatorCpp, ReferenceScreenshotWhenAvailable) {
   if (blue != result.detections.end()) EXPECT_LT(blue->distance_m, 2.5);
 }
 
+// 가까운 빨간 판의 참조 화면이 있을 때 검출을 확인한다. 파일이 없으면 건너뛴다.
 TEST(DistanceEstimatorCpp, NearRedReferenceScreenshotWhenAvailable) {
   const char *path = std::getenv("ROBOT_VISION_NEAR_RED_REFERENCE_IMAGE");
   if (path == nullptr) GTEST_SKIP() << "No local screenshot supplied";
@@ -347,6 +372,7 @@ TEST(DistanceEstimatorCpp, NearRedReferenceScreenshotWhenAvailable) {
 
 }  // namespace
 
+// 화면에 잘리거나 사각형이 아닌 색상 영역도 후보로 유지하되 거리 검출과 구분하는지 확인한다.
 TEST(ColorRegions, KeepsBorderClippedAndNonSquareRegionsWithoutMetricPose) {
   cv::Mat image(480, 640, CV_8UC3, cv::Scalar::all(0));
   cv::rectangle(image, {0, 100}, {70, 200}, cv::Scalar(0, 0, 255), cv::FILLED);
@@ -358,6 +384,7 @@ TEST(ColorRegions, KeepsBorderClippedAndNonSquareRegionsWithoutMetricPose) {
   EXPECT_TRUE(result.image_candidates[0].touches_border);
 }
 
+// 다른 해상도에서도 색상 위치 후보를 남기고 작은 잡음은 제거하는지 확인한다.
 TEST(ColorRegions, RetainsImagePositionsAtDifferentResolutionAndRejectsNoise) {
   cv::Mat image(720, 1280, CV_8UC3, cv::Scalar::all(0));
   cv::rectangle(image, {500, 200}, {600, 300}, cv::Scalar(0, 0, 255), cv::FILLED);
@@ -371,6 +398,7 @@ TEST(ColorRegions, RetainsImagePositionsAtDifferentResolutionAndRejectsNoise) {
 }
 
 // 같은 색 판이 하나의 윤곽이 되어도 뒤 판의 온전한 왼쪽 변을 찾아야 한다.
+// 합쳐진 파란 윤곽에서 뒤 판의 온전한 변을 찾아 거리 후보를 복구하는지 확인한다.
 TEST(VisibleEdges, RecoversRearPlateFromMergedBlueContour) {
   robot_vision::DetectorConfig config;
   config.distortion_coefficients = {0, 0, 0, 0, 0};
@@ -383,6 +411,7 @@ TEST(VisibleEdges, RecoversRearPlateFromMergedBlueContour) {
   EXPECT_NEAR(result.detections[1].position[2], config.camera_matrix[4] * 0.4 / 80, 0.1);
 }
 
+// 판이 겹친 실제 참조 화면이 있을 때 복구 결과를 확인한다. 파일이 없으면 건너뛴다.
 TEST(VisibleEdges, UserOverlapScreenshotWhenAvailable) {
   const char *path = std::getenv("ROBOT_VISION_OVERLAP_CAMERA_IMAGE");
   if (!path) GTEST_SKIP() << "No overlap camera image supplied";

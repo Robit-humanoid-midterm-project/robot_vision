@@ -1,3 +1,6 @@
+// 파일 역할: 계산 결과를 ROS 장애물·차선·로봇 제어 메시지로 변환한다.
+// 값을 구성해 반환하며, 실제 토픽 발행은 중심 노드가 수행한다.
+
 #include "robot_vision/vision_message_builder.hpp"
 
 #include <algorithm>
@@ -6,6 +9,7 @@
 
 namespace robot_vision {
 
+// 영상 시각, 카메라 좌표계 이름, 보정 확인 상태와 처리 상태를 담은 빈 장애물 메시지를 만든다.
 msg::ObstacleArray make_obstacle_array(
     const builtin_interfaces::msg::Time &stamp, const std::string &optical_frame_id,
     bool calibration_verified, const std::string &status)
@@ -18,6 +22,8 @@ msg::ObstacleArray make_obstacle_array(
     return array;
 }
 
+// 프레임의 장애물 결과를 배열 메시지에 추가한다.
+// 카메라 좌표, 거리, 바닥 투영의 유효 여부와 영상 꼭짓점을 복사한다.
 void append_obstacle_detections(msg::ObstacleArray &array, const VisionFrameResult &result)
 {
     for (size_t index = 0; index < result.obstacles.detections.size(); ++index) {
@@ -29,6 +35,7 @@ void append_obstacle_detections(msg::ObstacleArray &array, const VisionFrameResu
         item.position.y = detection.position[1];
         item.position.z = detection.position[2];
         item.distance_m = detection.distance_m;
+        // 바닥 투영이 가능한 경우에만 바닥·전방 거리의 valid를 true로 설정한다.
         if (ground)
         {
             item.ground_distance_m = ground->radial_m;
@@ -48,6 +55,8 @@ void append_obstacle_detections(msg::ObstacleArray &array, const VisionFrameResu
     }
 }
 
+// 차선 검출 결과를 ROS 메시지로 바꾼다.
+// 유효한 차선이 없으면 헤더만 설정하고 valid는 기본값 false로 남긴다.
 msg::LaneLine make_lane_message(const std_msgs::msg::Header &header, const LaneResult &lane)
 {
     msg::LaneLine lane_message;
@@ -72,11 +81,14 @@ msg::LaneLine make_lane_message(const std_msgs::msg::Header &header, const LaneR
     return lane_message;
 }
 
+// 로봇에 보낼 좌우 경계 거리와 가까운 장애물 최대 세 개를 구성한다.
+// 장애물 좌표는 (전방 거리, 좌우 위치)이며 단위는 m, 미측정 값은 -1000이다.
 humanoid_interfaces::msg::VisionData make_master_message(
     const msg::ObstacleArray &array, bool frame_drop, double left_distance, double right_distance)
 {
     humanoid_interfaces::msg::VisionData message;
     message.timestamp = rclcpp::Time(array.header.stamp).seconds();
+    // 먼저 모든 측정 필드를 -1000으로 채운다. 영상 끊김이면 이 상태를 그대로 반환한다.
     message.left_x_1_dist = message.right_x_2_dist = -1000.0;
     message.obstacle_1.fill(-1000.0);
     message.obstacle_2.fill(-1000.0);
@@ -88,6 +100,7 @@ humanoid_interfaces::msg::VisionData make_master_message(
         std::vector<const msg::ObstacleDetection *> nearby;
         for (const auto &obstacle : array.detections)
         {
+            // 전방 거리가 유효하고 0 이상 1.5m 미만인 장애물만 제어 메시지의 후보로 남긴다.
             if (!obstacle.forward_distance_valid ||
                 !std::isfinite(obstacle.forward_distance_m) ||
                 obstacle.forward_distance_m < 0.0 || obstacle.forward_distance_m >= 1.5 ||
@@ -96,10 +109,12 @@ humanoid_interfaces::msg::VisionData make_master_message(
             // No additional overlap filtering in the outgoing message.
             nearby.push_back(&obstacle);
         }
+        // 전방 거리와 좌우 위치로 바닥상의 상대 거리를 구해 가까운 장애물부터 정렬한다.
         std::stable_sort(nearby.begin(), nearby.end(), [](const auto *a, const auto *b) {
             return std::hypot(a->forward_distance_m, a->position.x) <
                    std::hypot(b->forward_distance_m, b->position.x);
         });
+        // 여기의 slots는 obstacle_1~3 메시지 필드의 저장 위치다. 삭제한 3×3 배치 기능과는 관계없다.
         std::array<double, 2> *slots[] = {
             &message.obstacle_1, &message.obstacle_2, &message.obstacle_3};
         for (size_t i = 0; i < std::min(size_t(3), nearby.size()); ++i)
