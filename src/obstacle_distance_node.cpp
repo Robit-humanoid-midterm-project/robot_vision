@@ -186,7 +186,7 @@ class ObstacleDistanceNode final : public rclcpp::Node
         lane_config_.roi_top_fraction = declare_parameter<double>("lane_roi_top_fraction", 0.18, fixed);
         lane_config_.reference_y_fraction = declare_parameter<double>("lane_reference_y_fraction", 0.85, fixed);
         lane_config_.candidate_min_bottom_y_fraction =
-            declare_parameter<double>("lane_candidate_min_bottom_y_fraction", 0.50, fixed);
+            declare_parameter<double>("lane_candidate_min_bottom_y_fraction", 0.70, fixed);
         lane_config_.min_abs_dx_per_dy = declare_parameter<double>("lane_min_abs_dx_per_dy", 0.1, fixed);
         lane_config_.max_abs_dx_per_dy = declare_parameter<double>("lane_max_abs_dx_per_dy", 2.3, fixed);
         lane_config_.min_observed_height_fraction =
