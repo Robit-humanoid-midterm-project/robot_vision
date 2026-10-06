@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <utility>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/calib3d.hpp>
 
 namespace robot_vision {
 namespace {
@@ -45,12 +47,91 @@ double grass_fraction(const cv::Mat &hsv, const cv::Vec4i &segment, int side,
   return total ? static_cast<double>(green) / total : 0.0;
 }
 
+// Hough 선분의 끝점만 곧아 보여도 실제 흰 띠는 휘어 있을 수 있다.
+// 관측 구간의 각 행에서 가장 가까운 흰 띠 중앙을 모아 직선·이차곡선으로 비교한다.
+// 일정 방향의 휘어짐이 허용치를 넘고 곡선 모델로 더 잘 설명되면 경계선 후보에서 제외한다.
+bool follows_straight_white_band(const cv::Mat &mask, const cv::Vec4f &fit,
+                                int min_y, int max_y, const LaneConfig &config, double *white_band_error = nullptr, const cv::Mat &camera_matrix = {}, const cv::Mat &distortion = {}) {
+  if (config.max_curve_deviation_px == 0) return true;
+  if (max_y <= min_y || std::abs(fit[1]) < 1e-4) return false;
+  const double slope = fit[0] / fit[1];
+  // Hough 끝점은 흰 띠의 가장자리일 수 있으므로 반대쪽 가장자리까지 포함할 여유를 둔다.
+  const int radius = std::max(12, cvRound(2.0 * config.group_tolerance_px));
+  std::vector<cv::Point2d> centers;
+  for (int y = std::max(0, min_y); y <= std::min(mask.rows - 1, max_y); y += 2) {
+    const double predicted_x = fit[2] + slope * (y - fit[3]);
+    const int start = std::max(0, cvRound(predicted_x) - radius);
+    const int stop = std::min(mask.cols - 1, cvRound(predicted_x) + radius);
+    const auto *row = mask.ptr<unsigned char>(y);
+    double best_distance = radius + 1.0;
+    double best_center = 0;
+    bool found = false;
+    for (int x = start; x <= stop;) {
+      if (!row[x]) { ++x; continue; }
+      const int first = x;
+      while (x <= stop && row[x]) ++x;
+      const int last = x - 1;
+      // 가로로 이어지는 다른 선이나 교차부의 넓은 흰 띠는 중앙점으로 사용하지 않는다.
+      // 영상 경계에서도 흰 띠가 잘리면 실제 중앙을 알 수 없다. 그 점은 곡선 검사에 사용하지 않는다.
+      if (first == start || last == stop) continue;
+      const double center = (first + last) * 0.5;
+      const double distance = std::abs(center - predicted_x);
+      if (distance < best_distance) {
+        best_distance = distance;
+        best_center = center;
+        found = true;
+      }
+    }
+    if (found) centers.emplace_back(best_center, y);
+  }
+  if (centers.size() < 12) return false;
+  double low_y = min_y, high_y = max_y;
+  // 렌즈 왜곡이 남은 원본에서는 실제 직선도 휘어 보인다.
+  // 곡선 판정용 점만 같은 크기의 보정 픽셀 좌표로 바꾼다. 반환하는 선 좌표는 원본 기준으로 유지한다.
+  if (!camera_matrix.empty()) {
+    std::vector<cv::Point2d> rectified;
+    cv::undistortPoints(centers, rectified, camera_matrix, distortion, cv::noArray(), camera_matrix);
+    centers = std::move(rectified);
+    // 관측 구간의 양 끝도 보정해 곡률 기준의 세로 길이를 같은 좌표계로 맞춘다.
+    std::vector<cv::Point2d> anchors{{fit[2] + slope * (min_y - fit[3]), double(min_y)},
+                                     {fit[2] + slope * (max_y - fit[3]), double(max_y)}};
+    cv::undistortPoints(anchors, rectified, camera_matrix, distortion, cv::noArray(), camera_matrix);
+    low_y = rectified[0].y;
+    high_y = rectified[1].y;
+  }
+  const double middle_y = (low_y + high_y) * 0.5;
+  const double half_span = (high_y - low_y) * 0.5;
+  if (!std::isfinite(half_span) || half_span <= 1e-6) return false;
+  cv::Mat design(static_cast<int>(centers.size()), 3, CV_64F);
+  cv::Mat x_values(static_cast<int>(centers.size()), 1, CV_64F);
+  for (size_t index = 0; index < centers.size(); ++index) {
+    // y를 -1~1로 정규화하면 이차항 계수가 중앙과 양 끝을 잇는 직선의 차이(px)가 된다.
+    const double t = (centers[index].y - middle_y) / half_span;
+    design.at<double>(index, 0) = 1;
+    design.at<double>(index, 1) = t;
+    design.at<double>(index, 2) = t * t;
+    x_values.at<double>(index) = centers[index].x;
+  }
+  cv::Mat linear, quadratic;
+  if (!cv::solve(design.colRange(0, 2), x_values, linear, cv::DECOMP_SVD) ||
+      !cv::solve(design, x_values, quadratic, cv::DECOMP_SVD)) return false;
+  const double linear_error = cv::norm(design.colRange(0, 2) * linear - x_values) /
+                              std::sqrt(static_cast<double>(centers.size()));
+  const double quadratic_error = cv::norm(design * quadratic - x_values) /
+                                 std::sqrt(static_cast<double>(centers.size()));
+  if (white_band_error) *white_band_error = linear_error;
+  if (linear_error > config.max_fit_error_px) return false;
+  const double deviation = std::abs(quadratic.at<double>(2));
+  // 픽셀 잡음을 곡선으로 오인하지 않도록 곡선 맞춤이 직선보다 충분히 좋아지는지도 확인한다.
+  return !(deviation > config.max_curve_deviation_px && quadratic_error < 0.8 * linear_error);
+}
+
 }  // namespace
 
 // 흰색 마스크 → 선분 추출 → 위치·기울기·잔디 검사 → 직선 맞춤 순으로 경계선을 선택한다.
 // 반환 마스크는 디버그 표시용이고 best.valid가 실제 선 검출 성공 여부다.
 LaneResult estimate_lane_line(const cv::Mat &bgr, const LaneConfig &config,
-                              const cv::Mat &exclude_mask) {
+                              const cv::Mat &exclude_mask, const cv::Mat &camera_matrix, const cv::Mat &distortion) {
   if (bgr.empty() || bgr.type() != CV_8UC3) throw std::invalid_argument("Expected BGR image");
   if (config.white_max_saturation < 0 || config.white_max_saturation > 255 ||
       config.white_min_value < 0 || config.white_min_value > 255 ||
@@ -66,6 +147,7 @@ LaneResult estimate_lane_line(const cv::Mat &bgr, const LaneConfig &config,
       config.max_abs_dx_per_dy <= config.min_abs_dx_per_dy ||
       config.min_observed_height_fraction <= 0 ||
       config.max_fit_error_px <= 0 || config.group_tolerance_px <= 0 ||
+      !std::isfinite(config.max_curve_deviation_px) || config.max_curve_deviation_px < 0 ||
       config.min_grass_support < 0 || config.min_grass_support > 1 ||
       config.bottom_outer_fraction <= 0 || config.bottom_outer_fraction >= 0.5) {
     throw std::invalid_argument("Invalid lane parameters");
@@ -145,7 +227,10 @@ LaneResult estimate_lane_line(const cv::Mat &bgr, const LaneConfig &config,
       max_y = std::max(max_y, std::max(item.segment[1], item.segment[3]));
     }
     const int span = max_y - min_y;
-    if (span < h * config.min_observed_height_fraction || points.size() < 4)
+    // 한 선분만 남았어도 아래의 실제 흰 띠 검사를 통과하면 사용할 수 있다.
+    // 곡선 검사를 끈 경우에는 기존처럼 최소 두 선분의 끝점 네 개를 요구한다.
+    if (span < h * config.min_observed_height_fraction ||
+        points.size() < 2 || (points.size() < 4 && config.max_curve_deviation_px == 0))
       continue;
     cv::Vec4f fit;
     // 여러 선분의 끝점에 강건한 직선을 맞추고, 실제 점들이 그 직선에서 얼마나 벗어났는지 검사한다.
@@ -160,8 +245,12 @@ LaneResult estimate_lane_line(const cv::Mat &bgr, const LaneConfig &config,
       const double expected_x = fit[2] + slope * (point.y - fit[3]);
       squared_error += (point.x - expected_x) * (point.x - expected_x);
     }
-    const double fit_error = std::sqrt(squared_error / points.size());
+    double fit_error = std::sqrt(squared_error / points.size());
     if (fit_error > config.max_fit_error_px) continue;
+    double white_band_error = 0;
+    if (!follows_straight_white_band(result.mask, fit, min_y, max_y, config, &white_band_error, camera_matrix, distortion)) continue;
+    // 두 끝점만 있으면 끝점 맞춤 오차는 거의 0이다. 이 경우 실제 흰 띠의 오차를 품질 값으로 사용한다.
+    if (points.size() < 4) fit_error = white_band_error;
     const double bottom_x = fit[2] + slope * (h - 1 - fit[3]);
     if ((seed.side == 0 && bottom_x > w * config.bottom_outer_fraction) ||
         (seed.side == 1 && bottom_x < w * (1.0 - config.bottom_outer_fraction)))

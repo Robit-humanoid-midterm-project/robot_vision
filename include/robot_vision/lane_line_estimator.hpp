@@ -22,6 +22,8 @@ struct LaneConfig {
   double max_abs_dx_per_dy{2.3};
   double min_observed_height_fraction{0.18};
   double max_fit_error_px{8.0};
+  // 실제 흰 띠의 중앙이 양 끝을 잇는 직선에서 휘는 최대 허용량(px). 0은 검사 해제.
+  double max_curve_deviation_px{4.0};
   double group_tolerance_px{18.0};
   double min_grass_support{0.60};
   // Allow a boundary near image center; reject lines crossing into the opposite half.
@@ -50,8 +52,11 @@ struct LaneResult {
   cv::Mat mask;
 };
 
+// camera_matrix/왜곡 계수가 주어지면 직선·곡선 판정용 점에만 왜곡 보정을 적용한다.
+// 반환 좌표와 마스크는 원본 영상 기준이다. 보정값 생략 시 기존 원본 좌표 검사로 동작한다.
 // BGR 영상에서 경계선 하나를 찾는다. exclude_mask의 켜진 픽셀은 검색에서 제외한다.
 LaneResult estimate_lane_line(const cv::Mat &bgr, const LaneConfig &config,
-                              const cv::Mat &exclude_mask = {});
+                              const cv::Mat &exclude_mask = {}, const cv::Mat &camera_matrix = {},
+                              const cv::Mat &distortion = {});
 
 }  // namespace robot_vision

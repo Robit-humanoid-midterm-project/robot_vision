@@ -2,6 +2,7 @@
 // 실제 로봇을 움직이는 코드가 아니며, 일반 카메라 실행 중에는 이 테스트가 동작하지 않는다.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <optional>
@@ -77,6 +78,146 @@ TEST(LaneLineCpp, RejectsSemicircleWithoutStraightBoundary) {
   cv::ellipse(image, {320, 310}, {140, 130}, 0, 0, 180,
               cv::Scalar::all(255), 7);
   EXPECT_FALSE(robot_vision::estimate_lane_line(image, {}).best.valid);
+}
+
+// 원근·기울기 때문에 반원의 일부 선분이 기존 끝점 검사에서 직선으로 통과한 사례를 검사한다.
+TEST(LaneLineCpp, RejectsPerspectiveArcFragmentsThatPassEndpointFit) {
+  robot_vision::LaneConfig config;
+  config.grass_hue_min = 43;
+  config.grass_min_saturation = 60;
+  config.min_grass_support = 0.8;
+  config.min_abs_dx_per_dy = 0.1;
+  // (중앙 y, 회전각, 반원 종류): 기존 검출기에서 실제로 오인식한 세 장면.
+  const std::array<std::array<int, 3>, 3> cases{{{260, 15, 0}, {350, 0, 1}, {350, 15, 1}}};
+  for (const auto &scene : cases) {
+    SCOPED_TRACE(::testing::Message() << "center_y=" << scene[0] << " angle=" << scene[1]);
+    cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
+    cv::ellipse(image, {200, scene[0]}, {120, 200}, scene[1],
+                scene[2] ? -90 : 0, scene[2] ? 90 : 180, cv::Scalar::all(255), 7);
+    auto old_rules = config;
+    old_rules.max_curve_deviation_px = 0;
+    ASSERT_TRUE(robot_vision::estimate_lane_line(image, old_rules).best.valid);
+    EXPECT_FALSE(robot_vision::estimate_lane_line(image, config).best.valid);
+  }
+}
+
+// 반원의 크기가 바뀌어도 함께 있는 실제 직선 경계선은 유지해야 한다.
+TEST(LaneLineCpp, KeepsStraightBoundaryBesideDifferentSemicircles) {
+  robot_vision::LaneConfig config;
+  config.grass_hue_min = 43;
+  config.grass_min_saturation = 60;
+  config.min_grass_support = 0.8;
+  config.min_abs_dx_per_dy = 0.1;
+  for (int radius : {120, 200, 280}) {
+    SCOPED_TRACE(radius);
+    cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
+    cv::line(image, {300, 110}, {100, 479}, cv::Scalar::all(255), 7);
+    cv::ellipse(image, {400, 320}, {radius, 130}, 0, -90, 90, cv::Scalar::all(255), 7);
+    const auto result = robot_vision::estimate_lane_line(image, config);
+    ASSERT_TRUE(result.best.valid);
+    EXPECT_EQ(result.best.side, "left");
+    EXPECT_NEAR(result.best.bottom.x, 100, 15);
+  }
+}
+
+// 부분적으로만 보이는 직선은 최소 관측 길이를 충족하면 유지하고, 길이 기준은 실제로 적용해야 한다.
+TEST(LaneLineCpp, KeepsShortVisibleBoundaryWithExplicitMinimumSpan) {
+  robot_vision::LaneConfig config;
+  config.min_abs_dx_per_dy = 0.1;
+  config.candidate_min_bottom_y_fraction = 0.5;
+  config.min_observed_height_fraction = 0.15;
+  for (int width : {5}) {
+    cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
+    cv::line(image, {105, 245}, {5, 325}, cv::Scalar::all(255), width);
+    const auto result = robot_vision::estimate_lane_line(image, config);
+    ASSERT_TRUE(result.best.valid);
+    EXPECT_EQ(result.best.side, "left");
+    auto stricter = config;
+    stricter.min_observed_height_fraction = 0.18;
+    EXPECT_FALSE(robot_vision::estimate_lane_line(image, stricter).best.valid);
+  }
+}
+
+// 화면 밖으로 나가는 실제 직선의 일부 흰 띠가 잘려도, 완전한 샘플로 직선성을 검증할 수 있어야 한다.
+TEST(LaneLineCpp, VerifiesSingleVisibleEdgeUsingWhiteBandPixels) {
+  robot_vision::LaneConfig config;
+  config.min_abs_dx_per_dy = 0.1;
+  config.candidate_min_bottom_y_fraction = 0.5;
+  config.min_observed_height_fraction = 0.15;
+  config.min_grass_support = 0.8;
+  cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
+  cv::line(image, {550, 349}, {660, 470}, cv::Scalar::all(255), 7);
+  const auto result = robot_vision::estimate_lane_line(image, config);
+  ASSERT_TRUE(result.best.valid);
+  EXPECT_EQ(result.best.side, "right");
+  EXPECT_LT(result.best.fit_error_px, 2.0);
+  // 실제 픽셀 검사를 끄면 단일 선분만으로는 통과시키지 않는다.
+  config.max_curve_deviation_px = 0;
+  EXPECT_FALSE(robot_vision::estimate_lane_line(image, config).best.valid);
+}
+
+// 다른 두께의 흰 띠가 화면 경계에서 잘려도, 잘리지 않은 중앙점으로 실제 직선을 검증한다.
+TEST(LaneLineCpp, KeepsWideStraightBandsAtImageBorder) {
+  robot_vision::LaneConfig config;
+  config.min_abs_dx_per_dy = 0.1;
+  config.candidate_min_bottom_y_fraction = 0.5;
+  config.min_observed_height_fraction = 0.15;
+  config.min_grass_support = 0.8;
+  for (int width : {11, 13, 17}) {
+    SCOPED_TRACE(width);
+    cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
+    cv::line(image, {550, 349}, {660, 470}, cv::Scalar::all(255), width);
+    const auto result = robot_vision::estimate_lane_line(image, config);
+    ASSERT_TRUE(result.best.valid);
+    EXPECT_EQ(result.best.side, "right");
+    EXPECT_LT(result.best.fit_error_px, 2.0);
+  }
+}
+
+// 동일한 곡선 허용값에서도 렌즈로 휘어진 실제 직선은 보정값을 사용해 유지해야 한다.
+TEST(LaneLineCpp, KeepsLensDistortedStraightBoundaryWithoutRelaxingCurveLimit) {
+  cv::Mat k = (cv::Mat_<double>(3, 3) << 471.953641, 0, 309.509126,
+               0, 476.574144, 228.222101, 0, 0, 1);
+  cv::Mat d = (cv::Mat_<double>(1, 5) << -0.18, 0, 0, 0, 0);
+  std::vector<cv::Point3d> rays;
+  for (int y = 100; y < 479; y += 2) {
+    const double x = 125.0 - 0.2 * (y - 100);
+    rays.emplace_back((x - k.at<double>(0, 2)) / k.at<double>(0, 0),
+                      (y - k.at<double>(1, 2)) / k.at<double>(1, 1), 1.0);
+  }
+  std::vector<cv::Point2d> projected;
+  cv::projectPoints(rays, cv::Vec3d(), cv::Vec3d(), k, d, projected);
+  std::vector<cv::Point> pixels;
+  for (const auto &point : projected) pixels.emplace_back(cvRound(point.x), cvRound(point.y));
+  cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
+  cv::polylines(image, std::vector<std::vector<cv::Point>>{pixels}, false, cv::Scalar::all(255), 7);
+  robot_vision::LaneConfig config;
+  config.min_abs_dx_per_dy = 0.1;
+  config.min_grass_support = 0.8;
+  config.candidate_min_bottom_y_fraction = 0.5;
+  config.min_observed_height_fraction = 0.55;
+  EXPECT_DOUBLE_EQ(config.max_curve_deviation_px, 2.0);
+  EXPECT_FALSE(robot_vision::estimate_lane_line(image, config).best.valid);
+  const auto corrected = robot_vision::estimate_lane_line(image, config, {}, k, d);
+  ASSERT_TRUE(corrected.best.valid);
+  EXPECT_EQ(corrected.best.side, "left");
+}
+
+// 보정값이 주어졌다고 실제 반원을 직선으로 통과시키지는 않아야 한다.
+TEST(LaneLineCpp, RejectsSemicircleWithCameraCalibration) {
+  cv::Mat k = (cv::Mat_<double>(3, 3) << 471.953641, 0, 309.509126,
+               0, 476.574144, 228.222101, 0, 0, 1);
+  cv::Mat d = (cv::Mat_<double>(1, 5) << 0.026101, -0.086354, -0.007248, -0.006668, 0);
+  robot_vision::LaneConfig config;
+  config.min_abs_dx_per_dy = 0.1;
+  config.min_grass_support = 0.8;
+  config.candidate_min_bottom_y_fraction = 0.5;
+  config.min_observed_height_fraction = 0.15;
+  for (int angle : {-15, 0, 15}) {
+    cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
+    cv::ellipse(image, {200, 260}, {120, 200}, angle, 0, 180, cv::Scalar::all(255), 7);
+    EXPECT_FALSE(robot_vision::estimate_lane_line(image, config, {}, k, d).best.valid);
+  }
 }
 
 // 주변 잔디색의 지지가 없는 흰 배경을 바닥 경계선으로 오인하지 않는지 확인한다.

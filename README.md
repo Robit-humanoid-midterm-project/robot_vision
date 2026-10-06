@@ -166,3 +166,9 @@ g++ -std=c++17 src/capture_dataset.cpp -o capture_dataset $(pkg-config --cflags 
 
 yaml에 해당하는 값이 있으면 우선적으로 yaml에 있는 값이 적용되고 
 yaml에 존재하지 않는값은 obstacle_distance_node.cpp에 declare_parameter에 저장된다.
+
+'''
+source /opt/ros/jazzy/setup.bash
+source ~/colcon_ws/install/setup.bash
+ros2 topic echo /vision2master
+'''

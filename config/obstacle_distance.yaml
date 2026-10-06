@@ -34,7 +34,11 @@ obstacle_distance:
     lane_grass_hue_min: 43            # 색상 H 최소값 (0~179)
     lane_grass_hue_max: 95             # 색상 H 최대값 (0~179)
     lane_grass_min_saturation: 60    # 채도 S 최소값 (0~255)
-    lane_min_grass_support: 0.80       # 선 안쪽의 잔디색 최소 비율 (0~1)
+    lane_min_grass_support: 0.70       # 선 안쪽의 잔디색 최소 비율 (0~1)
+    # 가림·화면 끝으로 일부만 보이는 직선도 검증할 최소 세로 길이 (480px 기준 72px)
+    lane_min_observed_height_fraction: 0.15
+    # 기존 카메라 보정값으로 왜곡 보정한 흰 띠의 휘어짐 허용량(px). 0은 곡선 검사 해제.
+    lane_max_curve_deviation_px: 4.0
 
 camera_bev_preview:
   ros__parameters:

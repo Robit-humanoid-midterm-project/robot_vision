@@ -31,6 +31,7 @@ class VisionPipeline {
     DetectorConfig detector_config_;
     LaneConfig lane_config_;
     double camera_height_m_;
+    cv::Mat lane_camera_matrix_, lane_distortion_;
     DistanceEstimator estimator_;
     RowLineTracker row_tracker_;
 };

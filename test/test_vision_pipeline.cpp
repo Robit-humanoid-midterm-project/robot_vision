@@ -89,7 +89,8 @@ TEST(FieldGeometry, UsesNearestRowAndMedianDepthForBoundaryDistance)
     EXPECT_NEAR(result.crossing->x, 183.333333333, 1e-6);
     EXPECT_NEAR(result.lateral_m, -0.5466666667, 1e-6);
     EXPECT_NEAR(result.left_distance_m, 0.5466666667, 1e-6);
-    EXPECT_NEAR(result.left_distance_m + result.right_distance_m, 1.5, 1e-9);
+    // 현재 경기장 폭의 사용자 근사값 1.4m를 유지한다.
+    EXPECT_NEAR(result.left_distance_m + result.right_distance_m, 1.4, 1e-9);
 }
 
 // 행 깊이가 없거나 경기장 폭 가정을 벗어나면 경계 거리를 미측정으로 남기는지 확인한다.

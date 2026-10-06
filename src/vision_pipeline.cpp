@@ -16,6 +16,10 @@ VisionPipeline::VisionPipeline(DetectorConfig detector, LaneConfig lane, double 
       camera_height_m_(camera_height_m), estimator_(detector_config_),
       row_tracker_(rows.history_frames, rows.match_y_px, rows.match_slope, rows.max_missing_frames)
 {
+    // 장애물 거리 계산과 동일한 기존 보정값을 사용한다. 별도 보정 설정을 만들지 않는다.
+    lane_camera_matrix_ = cv::Mat(3, 3, CV_64F, detector_config_.camera_matrix.data()).clone();
+    lane_distortion_ = cv::Mat(1, static_cast<int>(detector_config_.distortion_coefficients.size()),
+                               CV_64F, detector_config_.distortion_coefficients.data()).clone();
 }
 
 // BGR 영상에서 장애물 색상 후보와 위치·거리 결과를 만든다.
@@ -36,7 +40,11 @@ void VisionPipeline::complete(const cv::Mat &frame, VisionFrameResult &result)
         // 검출한 색상 영역을 조금 넓혀 차선 검출에서 제외한다. 판 위의 밝은 부분을 흰 선으로 고르지 않게 한다.
         cv::cvtColor(result.obstacles.mask_preview, color_exclusion, cv::COLOR_BGR2GRAY);
         cv::dilate(color_exclusion, color_exclusion, cv::getStructuringElement(cv::MORPH_RECT, {7, 7}));
-        result.lane = estimate_lane_line(frame, lane_config_, color_exclusion);
+        const bool matching_calibration = frame.cols == detector_config_.calibration_width &&
+                                          frame.rows == detector_config_.calibration_height;
+        result.lane = estimate_lane_line(frame, lane_config_, color_exclusion,
+            matching_calibration ? lane_camera_matrix_ : cv::Mat{},
+            matching_calibration ? lane_distortion_ : cv::Mat{});
     } catch (const std::exception &error) {
         result.lane_error = error.what();
         result.lane.mask = cv::Mat::zeros(frame.size(), CV_8UC1);

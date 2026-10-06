@@ -73,14 +73,14 @@ FieldGeometryResult estimate_field_geometry(
     result.status = CrossingStatus::measured;
     result.lateral_m = lateral;
     const double boundary_distance = std::abs(lateral);
-    // 경계까지 거리가 경기장 폭 안에 있을 때만 반대쪽 거리도 1.5m에서 빼서 계산한다.
-    if (boundary_distance <= 1.5) {
+    // 경계까지 거리가 경기장 폭 안에 있을 때만 반대쪽 거리도 1.4m에서 빼서 계산한다.
+    if (boundary_distance <= 1.4) {
         if (lane.best.side == "left") {
             result.left_distance_m = boundary_distance;
-            result.right_distance_m = 1.5 - boundary_distance;
+            result.right_distance_m = 1.4 - boundary_distance;
         } else if (lane.best.side == "right") {
             result.right_distance_m = boundary_distance;
-            result.left_distance_m = 1.5 - boundary_distance;
+            result.left_distance_m = 1.4 - boundary_distance;
         }
     }
     std::vector<cv::Point2d> principal;
