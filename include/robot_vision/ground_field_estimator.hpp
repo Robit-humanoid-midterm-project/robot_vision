@@ -6,7 +6,8 @@ namespace robot_vision {
 struct GroundFieldConfig {
     // Points belong to the undistorted image using the original K, without cropping.
     std::vector<double> source_points;
-    double width_m{1.86}, near_m{1.5}, far_m{3.75};
+    // Calibrated rectangle extends 0.23m outside each side of the 1.4m field.
+    double x_min_m{-0.23}, width_m{1.86}, near_m{1.5}, far_m{3.75};
     double field_width_m{1.4}, start_from_left_m{0.7};
     int reference_frames{5};
 };

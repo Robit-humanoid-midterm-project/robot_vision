@@ -14,7 +14,8 @@ VisionPipeline::VisionPipeline(DetectorConfig detector, LaneConfig lane, double 
                                RowTrackerConfig rows, std::optional<GroundFieldConfig> ground)
     : detector_config_(std::move(detector)), lane_config_(std::move(lane)),
       camera_height_m_(camera_height_m), estimator_(detector_config_),
-      row_tracker_(rows.history_frames, rows.match_y_px, rows.match_slope, rows.max_missing_frames)
+      row_tracker_(rows.history_frames, rows.match_y_px, rows.match_slope, rows.max_missing_frames),
+      boundary_selector_(ground ? ground->field_width_m : 1.4)
 {
     if (ground) ground_estimator_.emplace(detector_config_, std::move(*ground));
     // 장애물 거리 계산과 동일한 기존 보정값을 사용한다. 별도 보정 설정을 만들지 않는다.
@@ -43,9 +44,16 @@ void VisionPipeline::complete(const cv::Mat &frame, VisionFrameResult &result, c
     // 현재 영상의 판 아래쪽 선분으로 행을 찾고, 이전 프레임과 연결해 위치·기울기를 평균낸다.
     result.rows = row_tracker_.smooth(
         estimate_row_lines(result.obstacles.colors, result.obstacles.detections, frame.size()), frame.size());
-    // 차선과 가장 가까운 행의 교차점을 이용해 좌우 경계 거리를 추정한다.
-    result.geometry = ground_estimator_ ? ground_estimator_->estimate(result.lane, frame.size()) :
-        estimate_field_geometry(result.obstacles, result.lane, result.rows, frame.size(), detector_config_);
+    // Both measurements use exactly this frame; a failure in one does not suppress the other.
+    result.ground_geometry = ground_estimator_ ? ground_estimator_->estimate(result.lane, frame.size()) :
+        FieldGeometryResult{};
+    result.crossing_geometry = estimate_field_geometry(
+        result.obstacles, result.lane, result.rows, frame.size(), detector_config_);
+    const auto selected = boundary_selector_.select(result.ground_geometry, result.crossing_geometry);
+    result.geometry = selected.geometry;
+    result.boundary_source = selected.source;
+    result.ground_left_median_m = selected.ground_median_m;
+    result.crossing_left_median_m = selected.crossing_median_m;
     // 장애물 배열과 같은 순서로 바닥 투영 결과를 저장한다. 계산 불가한 항목은 nullopt로 남는다.
     result.ground_projections.clear();
     for (const auto &detection : result.obstacles.detections)
@@ -56,6 +64,7 @@ void VisionPipeline::complete(const cv::Mat &frame, VisionFrameResult &result, c
 void VisionPipeline::reset_tracking()
 {
     row_tracker_.reset();
+    boundary_selector_.reset();
     if (ground_estimator_) ground_estimator_->clear_pending_reference();
 }
 

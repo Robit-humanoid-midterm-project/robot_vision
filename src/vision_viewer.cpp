@@ -190,11 +190,12 @@ cv::Mat VisionViewer::annotate(const cv::Mat &frame, const VisionFrameResult &fr
         }
     }
     const auto &geometry = frame_result.geometry;
-    if (geometry.crossing) {
-        cv::drawMarker(canvas, *geometry.crossing, cv::Scalar(255, 255, 255),
+    const auto &crossings = frame_result.crossing_geometry;
+    if (crossings.crossing) {
+        cv::drawMarker(canvas, *crossings.crossing, cv::Scalar(255, 255, 255),
                        cv::MARKER_CROSS, 18, 2, cv::LINE_AA);
-        if (geometry.principal)
-            cv::line(canvas, *geometry.principal, *geometry.crossing,
+        if (crossings.principal)
+            cv::line(canvas, *crossings.principal, *crossings.crossing,
                      cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
     }
     // Draw observed color contours independently of metric pose acceptance.
@@ -210,8 +211,18 @@ cv::Mat VisionViewer::annotate(const cv::Mat &frame, const VisionFrameResult &fr
     for (size_t index = 0; index < result.detections.size(); ++index)
         draw_distance_label(canvas, result.detections[index],
                             frame_result.ground_projections.at(index), distance_labels);
-    const std::string crossing_note = robot_vision::crossing_note(geometry, lane.best.side);
-    for (const auto &point : {geometry.left_crossing, geometry.right_crossing})
+    const char *source = frame_result.boundary_source == BoundarySource::ground ? "GROUND" :
+                         frame_result.boundary_source == BoundarySource::crossing ? "CROSS" : "NONE";
+    const std::string crossing_note = frame_result.boundary_source == BoundarySource::none ?
+        "OUT: N/A | " + robot_vision::crossing_note(geometry, lane.best.side) :
+        std::string("OUT ") + source + ": L " + two_decimals(geometry.left_distance_m) +
+            " R " + two_decimals(geometry.right_distance_m) + " m";
+    const std::string ground_note = frame_result.ground_left_median_m ?
+        two_decimals(*frame_result.ground_left_median_m) + " m" :
+        frame_result.ground_geometry.status == CrossingStatus::waiting_reference ? "LOCKING" : "N/A";
+    const std::string comparison_note = "GROUND med3: " + ground_note + " | CROSS med3: " +
+        (frame_result.crossing_left_median_m ? two_decimals(*frame_result.crossing_left_median_m) + " m" : "N/A");
+    for (const auto &point : {crossings.left_crossing, crossings.right_crossing})
         if (point) cv::drawMarker(canvas, *point, cv::Scalar(255, 255, 255),
                                   cv::MARKER_CROSS, 18, 2, cv::LINE_AA);
     cv::rectangle(canvas, {0, 0}, {canvas.cols, 46}, cv::Scalar(20, 20, 20), cv::FILLED);
@@ -231,6 +242,10 @@ cv::Mat VisionViewer::annotate(const cv::Mat &frame, const VisionFrameResult &fr
     cv::putText(canvas, crossing_note, {8, 81}, cv::FONT_HERSHEY_SIMPLEX, 0.42,
                 cv::Scalar(0, 0, 0), 3, cv::LINE_AA);
     cv::putText(canvas, crossing_note, {8, 81}, cv::FONT_HERSHEY_SIMPLEX, 0.42,
+                cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+    cv::putText(canvas, comparison_note, {8, 100}, cv::FONT_HERSHEY_SIMPLEX, 0.40,
+                cv::Scalar(0, 0, 0), 3, cv::LINE_AA);
+    cv::putText(canvas, comparison_note, {8, 100}, cv::FONT_HERSHEY_SIMPLEX, 0.40,
                 cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
     return canvas;
 }

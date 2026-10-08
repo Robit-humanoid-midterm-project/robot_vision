@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "robot_vision/field_geometry.hpp"
+#include "robot_vision/boundary_distance_selector.hpp"
 
 namespace robot_vision {
 
@@ -21,6 +21,10 @@ struct VisionFrameResult {
     std::vector<RowLine> rows;
     // 차선과 행의 교차점 및 좌우 경계 거리.
     FieldGeometryResult geometry;
+    // Same-frame raw measurements and each source's filtered left coordinate for comparison.
+    FieldGeometryResult ground_geometry, crossing_geometry;
+    BoundarySource boundary_source{BoundarySource::none};
+    std::optional<double> ground_left_median_m, crossing_left_median_m;
     // obstacles.detections와 같은 순서의 바닥 투영 결과. nullopt는 투영 불가를 뜻한다.
     std::vector<std::optional<GroundProjection>> ground_projections;
     // 차선 처리 실패 원인. 중심 노드가 로그로 표시한다.

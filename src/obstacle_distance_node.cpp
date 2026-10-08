@@ -124,6 +124,7 @@ class ObstacleDistanceNode final : public rclcpp::Node
         if (declare_parameter<bool>("ground_field_enabled", false, fixed)) {
             GroundFieldConfig value;
             value.source_points = declare_parameter<std::vector<double>>("ground_source_points", std::vector<double>{}, fixed);
+            value.x_min_m = declare_parameter<double>("ground_x_min_m", value.x_min_m, fixed);
             value.width_m = declare_parameter<double>("ground_width_m", 1.86, fixed);
             value.near_m = declare_parameter<double>("ground_near_m", 1.5, fixed);
             value.far_m = declare_parameter<double>("ground_far_m", 3.75, fixed);

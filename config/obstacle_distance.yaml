@@ -21,10 +21,14 @@ obstacle_distance:
     obstacle_size_m: 0.4
     camera_height_m: 0.61
 
-    # YOLO 원본 선 좌표 → 왜곡 보정 → 실측 지면 좌표. 장애물 깊이를 사용하지 않는다.
+    # 지면 좌표와 장애물 행 교차점 거리를 동시에 계산한다.
+    # 각 방식 최근 유효값 3개 중앙값; 지면 값 우선, 실패하면 교차점 값 사용.
     # 시작할 때 왼쪽 선에서 0.7m에 놓고 기준점이 잡힐 때까지 정지한다.
     ground_field_enabled: true
     ground_source_points: [180.0, 146.0, 421.0, 139.0, 577.0, 239.0, 4.0, 264.0]
+    # Actual coordinates (m), far-left -> far-right -> near-right -> near-left:
+    # (-0.23,3.75), (1.63,3.75), (1.63,1.50), (-0.23,1.50)
+    ground_x_min_m: -0.23
     ground_width_m: 1.86
     ground_near_m: 1.5
     ground_far_m: 3.75

@@ -38,6 +38,7 @@ class VisionPipeline {
     DistanceEstimator estimator_;
     RowLineTracker row_tracker_;
     std::optional<GroundFieldEstimator> ground_estimator_;
+    BoundaryDistanceSelector boundary_selector_;
 };
 
 } // namespace robot_vision

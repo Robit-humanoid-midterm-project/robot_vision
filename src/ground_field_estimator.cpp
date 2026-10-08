@@ -10,6 +10,7 @@ GroundFieldEstimator::GroundFieldEstimator(const DetectorConfig &camera, GroundF
     : config_(std::move(config)), size_(camera.calibration_width, camera.calibration_height)
 {
     if (config_.source_points.size() != 8 || size_.width < 2 || size_.height < 2 ||
+        !std::isfinite(config_.x_min_m) || !std::isfinite(config_.x_min_m + config_.width_m) ||
         !std::isfinite(config_.width_m) || config_.width_m <= 0 ||
         !std::isfinite(config_.near_m) || config_.near_m < 0 ||
         !std::isfinite(config_.far_m) || config_.far_m <= config_.near_m ||
@@ -28,9 +29,12 @@ GroundFieldEstimator::GroundFieldEstimator(const DetectorConfig &camera, GroundF
     // Require the documented far-left, far-right, near-right, near-left winding.
     if (!cv::isContourConvex(source) || cv::contourArea(source, true) < 25)
         throw std::invalid_argument("Ground source points must form a clockwise image rectangle");
-    const std::vector<cv::Point2f> target{{0, float(config_.far_m)},
-        {float(config_.width_m), float(config_.far_m)},
-        {float(config_.width_m), float(config_.near_m)}, {0, float(config_.near_m)}};
+    const float x_min = static_cast<float>(config_.x_min_m);
+    const float x_max = static_cast<float>(config_.x_min_m + config_.width_m);
+    // Field origin: left sideline/start-line intersection (0,0).
+    const std::vector<cv::Point2f> target{{x_min, float(config_.far_m)},
+        {x_max, float(config_.far_m)}, {x_max, float(config_.near_m)},
+        {x_min, float(config_.near_m)}};
     homography_ = cv::getPerspectiveTransform(source, target);
     if (!cv::checkRange(homography_) || std::abs(cv::determinant(homography_)) < 1e-12)
         throw std::invalid_argument("Degenerate ground homography");
@@ -59,7 +63,7 @@ std::optional<GroundFieldEstimator::Line> GroundFieldEstimator::project(const La
     double min_y = config_.far_m, max_y = config_.near_m;
     for (const auto &p : ground) {
         // Restrict fitting to observed points inside the calibrated floor rectangle.
-        if (!std::isfinite(p.x) || !std::isfinite(p.y) || p.x < 0 || p.x > config_.width_m ||
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || p.x < config_.x_min_m || p.x > config_.x_min_m + config_.width_m ||
             p.y < config_.near_m || p.y > config_.far_m) continue;
         usable.push_back(p);
         min_y = std::min(min_y, double(p.y)); max_y = std::max(max_y, double(p.y));
@@ -85,7 +89,7 @@ cv::Mat GroundFieldEstimator::preview(const cv::Mat &raw, const LaneResult &lane
     const double scale = (height-1) / (config_.far_m-config_.near_m);
     const int width = std::max(2, cvRound(config_.width_m*scale)+1);
     const cv::Mat to_pixel = (cv::Mat_<double>(3,3) <<
-        scale,0,0, 0,-scale,config_.far_m*scale, 0,0,1);
+        scale,0,-config_.x_min_m*scale, 0,-scale,config_.far_m*scale, 0,0,1);
     const cv::Mat display_h = to_pixel*homography_;
     cv::Mat corrected, bird;
     cv::remap(raw, corrected, map_x_, map_y_, cv::INTER_LINEAR);

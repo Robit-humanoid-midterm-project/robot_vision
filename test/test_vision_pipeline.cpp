@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 #include <opencv2/imgproc.hpp>
+#include "robot_vision/ground_field_estimator.hpp"
 
 #include "robot_vision/frame_rate_limiter.hpp"
 #include "robot_vision/vision_message_builder.hpp"
@@ -239,4 +240,31 @@ TEST(VisionPipeline, ResetDropsPreviousRowSmoothingHistory)
     EXPECT_GT(fresh.rows.front().first.y, smoothed.rows.front().first.y);
 }
 
+TEST(VisionPipeline, RunsCrossingFallbackWhileGroundReferenceIsLocking) {
+    GroundFieldConfig ground;
+    ground.source_points={0,0,639,0,639,479,0,479};
+    ground.x_min_m=0;
+    VisionPipeline pipeline(simple_camera(),LaneConfig{},0.61,{},ground);
+    cv::Mat image(480,640,CV_8UC3,cv::Scalar::all(0));
+    cv::rectangle(image,{260,200},{380,320},cv::Scalar(255,0,0),cv::FILLED);
+    auto lanes=left_lane();
+    lanes.left=lanes.best;
+    lanes.left.confidence=0.95;
+    lanes.left.observed_y_min=100;
+    lanes.left.observed_y_max=400;
+    auto result=pipeline.detect_obstacles(image);
+    ASSERT_FALSE(result.obstacles.detections.empty());
+    pipeline.complete(image,result,lanes);
+    EXPECT_EQ(result.ground_geometry.status,CrossingStatus::waiting_reference);
+    EXPECT_EQ(result.crossing_geometry.status,CrossingStatus::measured);
+    EXPECT_EQ(result.boundary_source,BoundarySource::crossing);
+    EXPECT_GE(result.geometry.left_distance_m,0);
+    EXPECT_NEAR(result.geometry.left_distance_m+result.geometry.right_distance_m,1.4,1e-9);
+    EXPECT_TRUE(result.crossing_geometry.crossing);
+    // Missing current lines must not retain either filtered distance.
+    pipeline.complete(image,result,{});
+    EXPECT_EQ(result.boundary_source,BoundarySource::none);
+    EXPECT_EQ(result.geometry.left_distance_m,-1000);
+    EXPECT_EQ(result.geometry.right_distance_m,-1000);
+}
 } // namespace
