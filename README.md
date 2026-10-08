@@ -1,5 +1,8 @@
 ## 실행 방법 
 ```
+cd ~/colcon_ws
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select insta360_usb_cam robot_vision
 source ~/colcon_ws/install/setup.bash
 ros2 launch robot_vision obstacle_distance.launch.py
 ```
@@ -49,8 +52,6 @@ ros2 launch robot_vision obstacle_distance.launch.py start_camera:=false
 ROS 패키지를 읽을 수 있게 가상환경을 `--system-site-packages`로 만들고 NumPy 1.x를 사용한다.
 검증한 버전: torch 2.14.1+cpu, torchvision 0.29.1+cpu, ultralytics 8.4.174, numpy 1.26.4, opencv-python 4.11.0.86.
 가중치는 저장소에 포함하지 않으며 `weights` 실행 인자로 지정한다.
-
-통합 화면은 왼쪽 위 결과, 오른쪽 위 마스크, 왼쪽 아래 원본, 오른쪽 아래 BEV로 표시한다. BEV는 거리 계산과 같은 지면 변환을 쓰며 기존 YOLO 선을 파란색(왼쪽)·노란색(오른쪽)으로 옮겨 그린다. 두 축의 미터 축척을 같게 유지하고 0.5m 전방 간격 격자를 표시한다. BEV에서 선을 다시 검출하지 않는다.
 
 ## 현재 ROS2 msg
 
