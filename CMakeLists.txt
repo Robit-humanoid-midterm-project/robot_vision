@@ -64,10 +64,11 @@ ament_target_dependencies(record_dataset rclcpp sensor_msgs cv_bridge)
 target_link_libraries(record_dataset ${OpenCV_LIBRARIES})
 
 install(TARGETS obstacle_distance_node bev_node record_dataset DESTINATION lib/${PROJECT_NAME})
-install(PROGRAMS scripts/run_yolo_lane.sh scripts/yolo_lane_node.py DESTINATION lib/${PROJECT_NAME})
-install(FILES scripts/yolo_lane_fit.py DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/run_yolo_lane.sh scripts/yolo_lane_node.py scripts/setup_yolo.sh scripts/run_line_preview.sh scripts/insta360_line_preview.py DESTINATION lib/${PROJECT_NAME})
+install(FILES scripts/yolo_lane_fit.py scripts/yolo_runtime_paths.py scripts/requirements-yolo.txt DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
+install(FILES models/weights.pt DESTINATION share/${PROJECT_NAME}/models)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)

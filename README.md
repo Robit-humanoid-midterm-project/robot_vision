@@ -22,7 +22,7 @@ v4l2-ctl -d /dev/video0 --set-ctrl=zoom_absolute=100
 원본 영상과 선 결과를 같은 `LaneFrame`에 담아 다른 프레임의 좌표가 섞이지 않게 한다.
 
 ```bash
-ros2 launch robot_vision obstacle_distance.launch.py weights:=/home/doyeon/Downloads/weights.pt
+ros2 launch robot_vision obstacle_distance.launch.py weights:="$HOME/Downloads/weights.pt"
 # 카메라가 이미 실행 중이면:
 ros2 launch robot_vision obstacle_distance.launch.py start_camera:=false
 ```
@@ -46,12 +46,26 @@ ros2 launch robot_vision obstacle_distance.launch.py start_camera:=false
 
 `ground_field_enabled: false`를 지정하면 비교용 기존 장애물 행 깊이 방식으로 돌아간다. 모델은 직접 미터 거리를 출력하지 않는다.
 
-현재 노트북의 전용 실행 환경은 Codex 프로젝트의 `.venv-line`이다.
-다른 장비에서는 ROS Jazzy와 Python 3.12 가상환경에 torch/torchvision 및 ultralytics를 설치하고,
-`ROBOT_VISION_YOLO_PYTHON=/절대경로/가상환경/bin/python`을 설정한다.
-ROS 패키지를 읽을 수 있게 가상환경을 `--system-site-packages`로 만들고 NumPy 1.x를 사용한다.
-검증한 버전: torch 2.14.1+cpu, torchvision 0.29.1+cpu, ultralytics 8.4.174, numpy 1.26.4, opencv-python 4.11.0.86.
-가중치는 저장소에 포함하지 않으며 `weights` 실행 인자로 지정한다.
+다른 컴퓨터에서 이 저장소를 내려받은 뒤, 그 컴퓨터에서 아래를 실행한다. 사용자 이름과 Codex 폴더는 필요하지 않다. Python 가상환경은 컴퓨터마다 새로 만든다.
+
+```bash
+# 설치된 ROS 배포판으로 변경 (Jazzy 예시)
+source /opt/ros/jazzy/setup.bash
+sudo apt install python3-venv
+cd ~/colcon_ws
+colcon build --packages-up-to robot_vision insta360_usb_cam
+source install/setup.bash
+ros2 run robot_vision setup_yolo.sh
+ros2 run robot_vision run_yolo_lane.sh --check
+ros2 launch robot_vision obstacle_distance.launch.py
+```
+
+설치기는 사용자 홈의 `.local/share/robot_vision/venv`에 CPU 추론 환경을 만들고, 모델을 `.local/share/robot_vision/models/weights.pt`에 복사한다. `XDG_DATA_HOME`이 있으면 그 위치를 사용한다. 런처는 이 환경, 활성화된 가상환경, 기본 Python 순서로 찾는다. 별도 환경은 `ROBOT_VISION_YOLO_PYTHON`으로 지정할 수 있다.
+모델 기본 경로는 패키지 models → 사용자 데이터 폴더 → 사용자 Downloads 순서로 찾는다. 명시적인 `weights:=...` 또는 `ROBOT_VISION_WEIGHTS`가 우선한다. 모델이 없으면 경로를 표시하고 실행을 중단한다.
+`--check`는 Python 의존성과 빌드된 `LaneFrame` 메시지를 확인한다. 카메라 영상이 있어도 통합 화면이 계속 대기하면 먼저 YOLO 노드의 오류를 확인한다. 통합 화면은 YOLO가 보낸 원본 프레임을 사용한다.
+검증 버전은 ultralytics 8.4.174, numpy 1.26.4, opencv-python 4.11.0.86이다. CUDA/Jetson 환경은 해당 장비에 맞는 PyTorch를 별도로 설치하고 Python 경로를 지정한다.
+
+학습한 YOLO26 Nano 좌우 선 모델은 `models/weights.pt`로 저장소에 포함되고 빌드 때 설치된다. 별도 모델을 사용할 때만 `weights:=/절대경로/model.pt`를 지정한다. 가상환경은 Git에 포함하지 않고 설치 스크립트가 해당 컴퓨터에 생성한다.
 
 ## 현재 ROS2 msg
 

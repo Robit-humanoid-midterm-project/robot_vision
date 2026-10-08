@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from yolo_runtime_paths import default_weights
 
 import cv2
 import numpy as np
@@ -21,7 +22,7 @@ class YoloLaneNode(Node):
         super().__init__("yolo_lane")
         def param(name, value):
             return self.declare_parameter(name, value).value
-        self.weights = param("weights", "/home/doyeon/Downloads/weights.pt")
+        self.weights = str(Path(param("weights", default_weights())).expanduser())
         self.topic = param("image_topic", "/camera1/camera/compressed_image")
         self.output = param("output_topic", "/vision/yolo_lane_frame")
         self.conf = param("confidence", 0.5)

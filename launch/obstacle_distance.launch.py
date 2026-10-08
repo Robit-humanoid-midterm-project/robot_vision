@@ -1,3 +1,7 @@
+import os
+from pathlib import Path
+from ament_index_python.packages import get_package_share_directory
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
@@ -17,7 +21,19 @@ def detection_node(context):
         if viewer.lower() not in ('true', 'false'):
             raise ValueError('viewer must be true or false')
         overrides['viewer'] = viewer.lower() == 'true'
-    yolo_overrides = {'weights': LaunchConfiguration('weights').perform(context),
+    weights = LaunchConfiguration('weights').perform(context) or os.environ.get('ROBOT_VISION_WEIGHTS', '')
+    if weights:
+        weights = str(Path(os.path.expandvars(weights)).expanduser().resolve())
+    else:
+        data_home = Path(os.environ.get('XDG_DATA_HOME', str(Path.home() / '.local/share')))
+        candidates = [Path(get_package_share_directory('robot_vision')) / 'models/weights.pt',
+                      data_home / 'robot_vision/models/weights.pt',
+                      Path.home() / 'Downloads/weights.pt']
+        weights = str(next((p for p in candidates if p.is_file()), candidates[0]))
+    if not Path(weights).is_file():
+        raise RuntimeError('YOLO weights not found: ' + weights +
+                           '. Copy weights.pt to this computer and pass weights:=/absolute/path/weights.pt')
+    yolo_overrides = {'weights': weights,
                       'device': LaunchConfiguration('yolo_device').perform(context)}
     if topic:
         yolo_overrides['image_topic'] = topic
@@ -35,8 +51,8 @@ def generate_launch_description():
             FindPackageShare('robot_vision'), 'config', 'obstacle_distance.yaml'])),
         DeclareLaunchArgument('image_topic', default_value='', description='Empty uses YAML'),
         DeclareLaunchArgument('viewer', default_value='', description='Empty uses YAML'),
-        DeclareLaunchArgument('weights', default_value='/home/doyeon/Downloads/weights.pt',
-                              description='Trained left/right segmentation checkpoint'),
+        DeclareLaunchArgument('weights', default_value='',
+                              description='Checkpoint path; empty searches this user home or ROBOT_VISION_WEIGHTS'),
         DeclareLaunchArgument('yolo_device', default_value='cpu', description='cpu or GPU index, e.g. 0'),
         DeclareLaunchArgument('device', default_value='auto',
                               description='Camera device path; auto uses Insta360 discovery'),

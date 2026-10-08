@@ -5,6 +5,7 @@ import json
 import threading
 import time
 from pathlib import Path
+from yolo_runtime_paths import default_weights
 
 import cv2
 import numpy as np
@@ -55,7 +56,7 @@ def predict(model, frame, args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--weights", default="/home/doyeon/Downloads/weights.pt")
+    parser.add_argument("--weights", default=default_weights())
     parser.add_argument("--topic", default="/camera1/camera/compressed_image")
     parser.add_argument("--conf", type=float, default=0.50)
     parser.add_argument("--imgsz", type=int, default=640)

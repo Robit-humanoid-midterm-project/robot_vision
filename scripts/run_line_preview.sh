@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 set -eo pipefail
-source /opt/ros/jazzy/setup.bash
-if [[ -f /home/doyeon/colcon_ws/install/setup.bash ]]; then
-  source /home/doyeon/colcon_ws/install/setup.bash
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if [[ -z ${ROS_DISTRO:-} ]]; then
+  shopt -s nullglob
+  ros_setups=(/opt/ros/*/setup.bash)
+  if [[ ${#ros_setups[@]} -ne 1 ]]; then
+    echo "Source /opt/ros/<your-distro>/setup.bash and your workspace/install/setup.bash first." >&2
+    exit 1
+  fi
+  source "${ros_setups[0]}"
 fi
-set -u
-experiment_root=/home/doyeon/.codex/.chatgpt-projects/g-p-6aba6659faf48191b8a2d11202c2dc7b
-export YOLO_CONFIG_DIR="$experiment_root/line_preview/.ultralytics"
-mkdir -p "$YOLO_CONFIG_DIR"
-exec "$experiment_root/.venv-line/bin/python" "$(dirname "${BASH_SOURCE[0]}")/insta360_line_preview.py" "$@"
+workspace_root=${ROBOT_VISION_WORKSPACE:-$(cd "$script_dir/../../.." && pwd)}
+if [[ -f "$workspace_root/install/setup.bash" ]]; then
+  source "$workspace_root/install/setup.bash"
+fi
+exec bash "$script_dir/run_yolo_lane.sh" --preview "$@"
