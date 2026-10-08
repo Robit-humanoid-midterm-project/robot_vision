@@ -7,9 +7,9 @@ source ~/colcon_ws/install/setup.bash
 ros2 launch robot_vision obstacle_distance.launch.py
 ```
 ```
-v4l2-ctl -d /dev/video0 --set-ctrl=pan_absolute=0 
-v4l2-ctl -d /dev/video0 --set-ctrl=tilt_absolute=-77000
-v4l2-ctl -d /dev/video0 --set-ctrl=zoom_absolute=100
+v4l2-ctl -d /dev/video-insta360 --set-ctrl=pan_absolute=0 
+v4l2-ctl -d /dev/video-insta360 --set-ctrl=tilt_absolute=-77000
+v4l2-ctl -d /dev/video-insta360 --set-ctrl=zoom_absolute=100
 ```
 
 한문단씩 두 터미널에 실행하시면 됩니다. 
