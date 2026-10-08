@@ -34,7 +34,7 @@ struct LaneConfig {
 struct LaneLine {
   // true일 때만 선의 나머지 측정 필드를 검출 성공 결과로 사용한다.
   bool valid{false};
-  std::string side;  // left or right, classified by image slope
+  std::string side;  // left or right, from the model class in the YOLO pipeline
   cv::Point2f top, bottom;
   int observed_y_min{0}, observed_y_max{0};
   float reference_y_px{0};
@@ -43,12 +43,14 @@ struct LaneLine {
   float pixel_separation_px{0};
   double grass_support{0};
   double fit_error_px{0};
+  double confidence{0};
   std::vector<cv::Vec4i> observed_segments;
 };
 
-// 경계선 하나(best)와 디버그용 흰색 마스크를 함께 반환한다.
+// 좌우 경계선과 디버그 마스크. best는 기존 단일 선 토픽의 호환용 선택이다.
 struct LaneResult {
   LaneLine best;
+  LaneLine left, right;
   cv::Mat mask;
 };
 

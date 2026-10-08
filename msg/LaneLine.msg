@@ -13,3 +13,5 @@ int32 observed_y_min
 int32 observed_y_max
 float32 grass_support
 float32 fit_error_px
+# Model confidence; zero for a missing line or legacy detector.
+float32 confidence

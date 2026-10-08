@@ -21,8 +21,8 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ObstacleDetection.msg" "msg/ObstacleArray.msg"
-  "msg/LaneLine.msg"
-  DEPENDENCIES std_msgs geometry_msgs)
+  "msg/LaneLine.msg" "msg/LaneFrame.msg"
+  DEPENDENCIES std_msgs geometry_msgs sensor_msgs)
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 add_library(distance_estimator STATIC
@@ -33,7 +33,7 @@ add_library(distance_estimator STATIC
 target_include_directories(distance_estimator PUBLIC include ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(distance_estimator PUBLIC ${OpenCV_LIBRARIES})
 
-add_library(vision_pipeline STATIC src/vision_pipeline.cpp src/field_geometry.cpp)
+add_library(vision_pipeline STATIC src/vision_pipeline.cpp src/field_geometry.cpp src/ground_field_estimator.cpp)
 target_link_libraries(vision_pipeline PUBLIC distance_estimator)
 
 add_library(vision_viewer STATIC src/vision_viewer.cpp)
@@ -64,6 +64,8 @@ ament_target_dependencies(record_dataset rclcpp sensor_msgs cv_bridge)
 target_link_libraries(record_dataset ${OpenCV_LIBRARIES})
 
 install(TARGETS obstacle_distance_node bev_node record_dataset DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/run_yolo_lane.sh scripts/yolo_lane_node.py DESTINATION lib/${PROJECT_NAME})
+install(FILES scripts/yolo_lane_fit.py DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
@@ -74,6 +76,8 @@ if(BUILD_TESTING)
   target_link_libraries(test_distance_estimator_cpp distance_estimator ${OpenCV_LIBRARIES})
   ament_add_gtest(test_vision_pipeline_cpp test/test_vision_pipeline.cpp)
   target_link_libraries(test_vision_pipeline_cpp vision_viewer vision_message_builder)
+  ament_add_gtest(test_ground_field_cpp test/test_ground_field.cpp)
+  target_link_libraries(test_ground_field_cpp vision_pipeline)
   ament_add_gtest(test_bev_line_detector_cpp test/test_bev_line_detector.cpp)
   target_link_libraries(test_bev_line_detector_cpp bev_line_detector)
 endif()

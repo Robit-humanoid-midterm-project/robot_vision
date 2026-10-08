@@ -8,15 +8,17 @@
 #include <opencv2/calib3d.hpp>
 
 namespace robot_vision {
+namespace { constexpr double field_width_m = 1.4; }
 
 // 장애물·차선·행과 보정값을 받아 교차점, 좌우 위치와 경계 거리를 반환한다.
 // 교차점이나 같은 행의 깊이를 못 구하면 거리를 미측정(-1000)으로 유지한다.
-FieldGeometryResult estimate_field_geometry(
+static FieldGeometryResult estimate_single_boundary(
     const DetectResult &obstacles, const LaneResult &lane,
     const std::vector<RowLine> &rows, const cv::Size &size, const DetectorConfig &config)
 {
     FieldGeometryResult result;
-    if (!lane.best.valid || rows.empty())
+    if (!lane.best.valid || rows.empty() || size.width != config.calibration_width ||
+        size.height != config.calibration_height)
         return result;
     result.status = CrossingStatus::no_intersection;
     const double center_x = (size.width - 1) * 0.5;
@@ -43,6 +45,10 @@ FieldGeometryResult estimate_field_geometry(
     const cv::Point2d crossing = a + d * ((b - a).cross(e) / denominator);
     if (!(crossing.x >= 0 && crossing.x < size.width &&
           crossing.y >= 0 && crossing.y < size.height))
+        return result;
+    // Model boundaries are only measured in their observed interval.
+    if (lane.best.confidence > 0 &&
+        (crossing.y < lane.best.observed_y_min || crossing.y > lane.best.observed_y_max))
         return result;
     result.crossing = crossing;
     result.status = CrossingStatus::no_row_depth;
@@ -74,13 +80,13 @@ FieldGeometryResult estimate_field_geometry(
     result.lateral_m = lateral;
     const double boundary_distance = std::abs(lateral);
     // 경계까지 거리가 경기장 폭 안에 있을 때만 반대쪽 거리도 1.4m에서 빼서 계산한다.
-    if (boundary_distance <= 1.4) {
+    if (boundary_distance <= field_width_m) {
         if (lane.best.side == "left") {
             result.left_distance_m = boundary_distance;
-            result.right_distance_m = 1.4 - boundary_distance;
+            result.right_distance_m = field_width_m - boundary_distance;
         } else if (lane.best.side == "right") {
             result.right_distance_m = boundary_distance;
-            result.left_distance_m = 1.4 - boundary_distance;
+            result.left_distance_m = field_width_m - boundary_distance;
         }
     }
     std::vector<cv::Point2d> principal;
@@ -88,6 +94,37 @@ FieldGeometryResult estimate_field_geometry(
     cv::projectPoints(std::vector<cv::Point3d>{{0, normalized.front().y, 1}},
         cv::Vec3d(0, 0, 0), cv::Vec3d(0, 0, 0), k, distortion, principal);
     result.principal = cv::Point(cvRound(principal.front().x), cvRound(crossing.y));
+    return result;
+}
+
+// 양쪽은 먼저 독립적으로 계산한다. 한쪽 거리만 유효하면 경기장 폭으로 나머지를 추정한다.
+FieldGeometryResult estimate_field_geometry(
+    const DetectResult &obstacles, const LaneResult &lane,
+    const std::vector<RowLine> &rows, const cv::Size &size, const DetectorConfig &config)
+{
+    if (!lane.left.valid && !lane.right.valid)
+        return estimate_single_boundary(obstacles, lane, rows, size, config);
+    LaneResult left, right;
+    left.best = lane.left;
+    right.best = lane.right;
+    const auto l = estimate_single_boundary(obstacles, left, rows, size, config);
+    const auto r = estimate_single_boundary(obstacles, right, rows, size, config);
+    if (!lane.left.valid) return r;
+    if (!lane.right.valid) return l;
+    auto result = static_cast<int>(l.status) >= static_cast<int>(r.status) ? l : r;
+    result.left_distance_m = l.left_distance_m;
+    result.right_distance_m = r.right_distance_m;
+    const auto valid_distance = [](double distance) {
+        return std::isfinite(distance) && distance >= 0.0 && distance <= field_width_m;
+    };
+    const bool left_measured = valid_distance(result.left_distance_m);
+    const bool right_measured = valid_distance(result.right_distance_m);
+    if (left_measured && !right_measured)
+        result.right_distance_m = field_width_m - result.left_distance_m;
+    else if (right_measured && !left_measured)
+        result.left_distance_m = field_width_m - result.right_distance_m;
+    result.left_crossing = l.crossing;
+    result.right_crossing = r.crossing;
     return result;
 }
 

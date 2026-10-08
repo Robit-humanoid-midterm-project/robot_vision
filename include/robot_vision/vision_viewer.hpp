@@ -28,19 +28,21 @@ class VisionViewer {
     cv::Mat no_image_view(const std::string &image_topic) const;
     // 전처리 창용 영상 없음 안내 화면을 반환한다.
     cv::Mat no_image_preprocess() const;
+    cv::Mat dashboard_view(const cv::Mat &raw, const cv::Mat &white_mask,
+        const cv::Mat &obstacle_mask, const cv::Mat &annotated, const cv::Mat &bev) const;
     // 필요한 창을 표시하고 키 이벤트를 처리한다.
     void show(const cv::Mat &raw, const cv::Mat &white_mask, const cv::Mat &obstacle_mask,
-              const cv::Mat &annotated, const cv::Mat &preprocess);
+              const cv::Mat &annotated, const cv::Mat &preprocess, const cv::Mat &bev = {});
 
   private:
-    // 세 영역을 배치하는 내부 함수. 로봇 제어 값을 계산하지 않는다.
+    // 네 영역을 배치하는 내부 함수. 로봇 제어 값을 계산하지 않는다.
     void show_dashboard(const cv::Mat &raw, const cv::Mat &white_mask, const cv::Mat &obstacle_mask,
-                        const cv::Mat &annotated);
+                        const cv::Mat &annotated, const cv::Mat &bev);
     DetectorConfig debug_config_;
     bool viewer_{false}, show_preprocess_{true}, viewer_fullscreen_{true};
     double processing_fps_{0.0};
     bool window_initialized_{false}, preprocess_initialized_{false};
-    const std::string window_name_ = "Robot vision - RAW / OPENCV / RESULT";
+    const std::string window_name_ = "Robot vision - RAW / MASK / RESULT / BEV";
     const std::string preprocess_window_name_ = "Obstacle preprocess - RED / BLUE";
 };
 

@@ -21,6 +21,17 @@ obstacle_distance:
     obstacle_size_m: 0.4
     camera_height_m: 0.61
 
+    # YOLO 원본 선 좌표 → 왜곡 보정 → 실측 지면 좌표. 장애물 깊이를 사용하지 않는다.
+    # 시작할 때 왼쪽 선에서 0.7m에 놓고 기준점이 잡힐 때까지 정지한다.
+    ground_field_enabled: true
+    ground_source_points: [180.0, 146.0, 421.0, 139.0, 577.0, 239.0, 4.0, 264.0]
+    ground_width_m: 1.86
+    ground_near_m: 1.5
+    ground_far_m: 3.75
+    field_width_m: 1.4
+    start_from_left_m: 0.7
+    ground_reference_frames: 5
+
     # 현장에서 조정하는 색상 HSV 및 최소 면적 (px²)
     red_lower_1: [0, 60, 60]
     red_upper_1: [12, 255, 255]
@@ -30,15 +41,20 @@ obstacle_distance:
     blue_upper: [125, 255, 255]
     min_area_px: 500.0
 
-    # 흰색 경계선 주변의 잔디색 판단 기준 (기존 코드 기본값)
-    lane_grass_hue_min: 43            # 색상 H 최소값 (0~179)
-    lane_grass_hue_max: 95             # 색상 H 최대값 (0~179)
-    lane_grass_min_saturation: 60    # 채도 S 최소값 (0~255)
-    lane_min_grass_support: 0.70       # 선 안쪽의 잔디색 최소 비율 (0~1)
-    # 가림·화면 끝으로 일부만 보이는 직선도 검증할 최소 세로 길이 (480px 기준 72px)
-    lane_min_observed_height_fraction: 0.15
-    # 기존 카메라 보정값으로 왜곡 보정한 흰 띠의 휘어짐 허용량(px). 0은 곡선 검사 해제.
-    lane_max_curve_deviation_px: 4.0
+    lane_frame_topic: /vision/yolo_lane_frame
+    image_timeout_s: 1.0
+
+# 원본 프레임과 YOLO 결과를 묶어서 중심 노드에 전달한다.
+yolo_lane:
+  ros__parameters:
+    image_topic: /camera1/camera/compressed_image
+    output_topic: /vision/yolo_lane_frame
+    confidence: 0.5
+    image_size: 640
+    max_processing_fps: 15.0
+    max_frame_age_s: 1.0
+    min_observed_height_fraction: 0.15
+    max_fit_error_px: 8.0
 
 camera_bev_preview:
   ros__parameters:
@@ -52,7 +68,7 @@ camera_bev_preview:
     line_white_max_saturation: 85
     # 선의 경기장 안쪽에 녹색 바닥이 있어야 하는 최소 비율.
     line_min_grass_support: 0.75
-    # BEV 영상 좌우 끝에 대응하는 바닥의 실측 폭(m), 현재는 근삿값.
+    # BEV 영상 좌우 끝에 대응하는 바닥의 실측 폭(m).
     bev_width_m: 1.86
     # 같은 전방 위치의 좌우 흰 선 사이 실측 거리(m).
     field_width_m: 1.4

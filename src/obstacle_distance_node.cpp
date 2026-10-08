@@ -26,6 +26,7 @@
 #include "robot_vision/vision_message_builder.hpp"
 #include "robot_vision/lane_line_estimator.hpp"
 #include "robot_vision/msg/lane_line.hpp"
+#include "robot_vision/msg/lane_frame.hpp"
 #include "robot_vision/msg/obstacle_array.hpp"
 #include "robot_vision/msg/obstacle_detection.hpp"
 
@@ -51,6 +52,7 @@ class ObstacleDistanceNode final : public rclcpp::Node
         fixed.description = "Set at launch; restart to change";
         // 영상 입력과 화면 설정: DISPLAY와 WAYLAND_DISPLAY가 모두 없으면 로컬 창 표시를 사용하지 않는다.
         image_topic_ = declare_parameter<std::string>("image_topic", "/camera1/camera/compressed_image", fixed);
+        lane_frame_topic_ = declare_parameter<std::string>("lane_frame_topic", "/vision/yolo_lane_frame", fixed);
         optical_frame_id_ = declare_parameter<std::string>("optical_frame_id", "camera1_optical_frame", fixed);
         viewer_ = declare_parameter<bool>("viewer", true, fixed) &&
                   (std::getenv("DISPLAY") != nullptr || std::getenv("WAYLAND_DISPLAY") != nullptr);
@@ -112,34 +114,27 @@ class ObstacleDistanceNode final : public rclcpp::Node
             declare_parameter<double>("max_relative_reprojection_error", config.max_relative_reprojection_error, fixed);
         config.min_distance_m = declare_parameter<double>("min_distance_m", config.min_distance_m, fixed);
         config.max_distance_m = declare_parameter<double>("max_distance_m", config.max_distance_m, fixed);
-        // 흰색 경계선 검출의 색상·기울기·잔디 지지 조건을 설정한다.
-        lane_config_.white_max_saturation = declare_parameter<int>("lane_white_max_saturation", 85, fixed);
-        lane_config_.white_min_value = declare_parameter<int>("lane_white_min_value", 175, fixed);
-        lane_config_.grass_hue_min = declare_parameter<int>("lane_grass_hue_min", 43, fixed);
-        lane_config_.grass_hue_max = declare_parameter<int>("lane_grass_hue_max", 95, fixed);
-        lane_config_.grass_min_saturation = declare_parameter<int>("lane_grass_min_saturation", 60, fixed);
-        lane_config_.roi_top_fraction = declare_parameter<double>("lane_roi_top_fraction", 0.18, fixed);
-        lane_config_.reference_y_fraction = declare_parameter<double>("lane_reference_y_fraction", 0.85, fixed);
-        lane_config_.candidate_min_bottom_y_fraction =
-            declare_parameter<double>("lane_candidate_min_bottom_y_fraction", 0.50, fixed);
-        lane_config_.min_abs_dx_per_dy = declare_parameter<double>("lane_min_abs_dx_per_dy", 0.1, fixed);
-        lane_config_.max_abs_dx_per_dy = declare_parameter<double>("lane_max_abs_dx_per_dy", 2.3, fixed);
-        lane_config_.min_observed_height_fraction =
-            declare_parameter<double>("lane_min_observed_height_fraction", 0.18, fixed);
-        lane_config_.max_fit_error_px = declare_parameter<double>("lane_max_fit_error_px", 8.0, fixed);
-        lane_config_.max_curve_deviation_px = declare_parameter<double>(
-            "lane_max_curve_deviation_px", lane_config_.max_curve_deviation_px, fixed);
-        lane_config_.group_tolerance_px = declare_parameter<double>("lane_group_tolerance_px", 18.0, fixed);
-        lane_config_.min_grass_support = declare_parameter<double>("lane_min_grass_support", 0.80, fixed);
-        lane_config_.bottom_outer_fraction = declare_parameter<double>("lane_bottom_outer_fraction", lane_config_.bottom_outer_fraction, fixed);
         calibration_verified_ = config.calibration_verified;
         // 행 추적은 최근 프레임 수와 위치·기울기 일치 기준으로 흔들림을 줄인다.
         const int row_smoothing_frames = declare_parameter<int>("row_smoothing_frames", 5, fixed);
         const double row_match_y_px = declare_parameter<double>("row_match_y_px", 35.0, fixed);
         const double row_match_slope = declare_parameter<double>("row_match_slope", 0.18, fixed);
         const int row_track_max_missing_frames = declare_parameter<int>("row_track_max_missing_frames", 3, fixed);
+        std::optional<GroundFieldConfig> ground;
+        if (declare_parameter<bool>("ground_field_enabled", false, fixed)) {
+            GroundFieldConfig value;
+            value.source_points = declare_parameter<std::vector<double>>("ground_source_points", std::vector<double>{}, fixed);
+            value.width_m = declare_parameter<double>("ground_width_m", 1.86, fixed);
+            value.near_m = declare_parameter<double>("ground_near_m", 1.5, fixed);
+            value.far_m = declare_parameter<double>("ground_far_m", 3.75, fixed);
+            value.field_width_m = declare_parameter<double>("field_width_m", 1.4, fixed);
+            value.start_from_left_m = declare_parameter<double>("start_from_left_m", 0.7, fixed);
+            value.reference_frames = declare_parameter<int>("ground_reference_frames", 5, fixed);
+            ground = std::move(value);
+            RCLCPP_INFO(get_logger(), "Ground field coordinate enabled: start %.2fm from left; keep robot stationary until reference locks", ground->start_from_left_m);
+        }
         pipeline_ = std::make_unique<VisionPipeline>(config, lane_config_, camera_height_m_,
-            RowTrackerConfig{row_smoothing_frames, row_match_y_px, row_match_slope, row_track_max_missing_frames});
+            RowTrackerConfig{row_smoothing_frames, row_match_y_px, row_match_slope, row_track_max_missing_frames}, ground);
         display_ = std::make_unique<VisionViewer>(config, viewer_, show_preprocess_, viewer_fullscreen_);
 
         // 영상은 오래된 프레임이 쌓이지 않도록 최신 한 장만 대기시킨다. 제어 토픽의 설정은 별도로 유지한다.
@@ -147,17 +142,19 @@ class ObstacleDistanceNode final : public rclcpp::Node
         master_pub_ = create_publisher<humanoid_interfaces::msg::VisionData>("vision2master", rclcpp::QoS(10));
         output_pub_ = create_publisher<msg::ObstacleArray>("/vision/obstacles", rclcpp::QoS(1));
         lane_pub_ = create_publisher<msg::LaneLine>("/vision/lane_line", rclcpp::QoS(1));
+        left_lane_pub_ = create_publisher<msg::LaneLine>("/vision/left_lane_line", rclcpp::QoS(1));
+        right_lane_pub_ = create_publisher<msg::LaneLine>("/vision/right_lane_line", rclcpp::QoS(1));
         lane_mask_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/lane_mask", image_qos);
         debug_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/obstacle_debug", image_qos);
         mask_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/obstacle_mask", image_qos);
         preprocess_pub_ = create_publisher<sensor_msgs::msg::Image>("/vision/obstacle_preprocess", image_qos);
-        image_sub_ = create_subscription<sensor_msgs::msg::CompressedImage>(
-            image_topic_, image_qos,
-            [this](sensor_msgs::msg::CompressedImage::ConstSharedPtr image) { on_image(image); });
+        lane_frame_sub_ = create_subscription<msg::LaneFrame>(
+            lane_frame_topic_, image_qos,
+            [this](msg::LaneFrame::ConstSharedPtr inference) { on_inference(inference); });
         // 200ms마다 영상 상태를 확인한다. 검출을 새로 수행하는 타이머는 아니다.
         watchdog_ = create_wall_timer(std::chrono::milliseconds(200), [this] { watchdog(); });
         RCLCPP_INFO(get_logger(), "Input: %s; outputs: /vision/obstacles, /vision/obstacle_debug",
-                    image_topic_.c_str());
+                    lane_frame_topic_.c_str());
         if (!calibration_verified_)
         {
             RCLCPP_WARN(get_logger(), "UNVERIFIED legacy calibration: check measured distances.");
@@ -226,6 +223,8 @@ class ObstacleDistanceNode final : public rclcpp::Node
         master_pub_->publish(make_master_message(array, true));
         output_pub_->publish(array);
         lane_pub_->publish(msg::LaneLine().set__header(array.header));
+        left_lane_pub_->publish(msg::LaneLine().set__header(array.header));
+        right_lane_pub_->publish(msg::LaneLine().set__header(array.header));
         const auto canvas = display_->no_image_view(image_topic_);
         publish_image(debug_pub_, canvas, array.header);
         publish_image(lane_mask_pub_, cv::Mat(480, 640, CV_8UC3, cv::Scalar::all(0)), array.header);
@@ -237,8 +236,40 @@ class ObstacleDistanceNode final : public rclcpp::Node
 
     // 카메라 토픽에서 영상 한 장을 받을 때 실행하는 콜백이다.
     // 처리 시각에 맞는 프레임만 선택하고, 계산 결과를 제어 토픽과 디버그 화면으로 나눈다.
-    void on_image(const sensor_msgs::msg::CompressedImage::ConstSharedPtr &image)
+    void on_inference(const msg::LaneFrame::ConstSharedPtr &inference)
     {
+        const auto *image = &inference->image;
+        LaneResult lanes;
+        const auto to_line = [&](const msg::LaneLine &source, const std::string &side) {
+            LaneLine line;
+            // Reject malformed or mismatched side results instead of reusing an old line.
+            if (!source.valid || source.side != side ||
+                source.header.stamp != image->header.stamp ||
+                !std::isfinite(source.top.x) || !std::isfinite(source.top.y) ||
+                !std::isfinite(source.bottom.x) || !std::isfinite(source.bottom.y) ||
+                source.bottom.y <= source.top.y || !std::isfinite(source.confidence) || source.confidence <= 0)
+                return line;
+            line.valid = true;
+            line.side = side;
+            line.top = {source.top.x, source.top.y};
+            line.bottom = {source.bottom.x, source.bottom.y};
+            line.observed_y_min = source.observed_y_min;
+            line.observed_y_max = source.observed_y_max;
+            line.reference_y_px = source.reference_y_px;
+            line.line_x_at_reference_px = source.line_x_at_reference_px;
+            line.pixel_separation_px = source.pixel_separation_px;
+            line.fit_error_px = source.fit_error_px;
+            line.confidence = source.confidence;
+            line.observed_segments.push_back({cvRound(line.top.x), cvRound(line.top.y),
+                                             cvRound(line.bottom.x), cvRound(line.bottom.y)});
+            return line;
+        };
+        if (inference->status == "ok") {
+            lanes.left = to_line(inference->left, "left");
+            lanes.right = to_line(inference->right, "right");
+            lanes.best = lanes.left.valid && (!lanes.right.valid ||
+                lanes.left.confidence >= lanes.right.confidence) ? lanes.left : lanes.right;
+        }
         const auto now = SteadyClock::now();
         // 아직 다음 처리 시각 전이면 이 프레임을 건너뛴다. 뒤늦게 쌓인 프레임을 몰아서 처리하지 않는다.
         if (!frame_limiter_->should_process(now))
@@ -250,6 +281,11 @@ class ObstacleDistanceNode final : public rclcpp::Node
             // Decode the transmitted JPEG only for frames selected for processing.
             frame = cv::imdecode(image->data, cv::IMREAD_COLOR);
             if (frame.empty()) throw std::runtime_error("Cannot decode camera JPEG");
+            if (inference->status == "ok") {
+                lanes.mask = cv::imdecode(inference->mask.data, cv::IMREAD_GRAYSCALE);
+                if (lanes.mask.empty() || lanes.mask.size() != frame.size())
+                    throw std::runtime_error("YOLO mask/image dimensions differ or mask is invalid");
+            }
             result = pipeline_->detect_obstacles(frame);
         }
         catch (const cv::Exception &error)
@@ -265,7 +301,8 @@ class ObstacleDistanceNode final : public rclcpp::Node
         have_image_ = true;
         last_received_ = now;
         // 같은 영상에 차선·행·경계 거리 계산을 추가하고 장애물의 바닥 거리도 채운다.
-        pipeline_->complete(frame, result);
+        pipeline_->complete(frame, result, lanes);
+        if (inference->status != "ok") result.lane_error = inference->status;
         if (!result.lane_error.empty())
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 3000,
                                  "Lane processing failed: %s", result.lane_error.c_str());
@@ -273,6 +310,11 @@ class ObstacleDistanceNode final : public rclcpp::Node
         const auto calculated = SteadyClock::now();
         // 계산 결과부터 발행한다. 화면 생성·표시 때문에 로봇용 결과 전송이 뒤로 밀리지 않게 한다.
         lane_pub_->publish(make_lane_message(image->header, result.lane));
+        LaneResult left_only, right_only;
+        left_only.best = result.lane.left;
+        right_only.best = result.lane.right;
+        left_lane_pub_->publish(make_lane_message(image->header, left_only));
+        right_lane_pub_->publish(make_lane_message(image->header, right_only));
         auto array = make_obstacle_array(image->header.stamp, optical_frame_id_,
                                          calibration_verified_, result.obstacles.status);
         append_obstacle_detections(array, result);
@@ -298,12 +340,13 @@ class ObstacleDistanceNode final : public rclcpp::Node
             publish_image(preprocess_pub_, preprocess, image->header);
         }
         // 창 표시 시간을 앞선 계산·디버그 처리와 분리해서 측정한다.
+        const cv::Mat bev = viewer_ ? pipeline_->bev_preview(frame, result.lane) : cv::Mat{};
         const auto rendered = SteadyClock::now();
-        display_->show(frame, result.lane.mask, result.obstacles.mask_preview, canvas, preprocess);
+        display_->show(frame, result.lane.mask, result.obstacles.mask_preview, canvas, preprocess, bev);
         record_performance(now, calculated, rendered, SteadyClock::now());
     }
 
-    std::string image_topic_, optical_frame_id_;
+    std::string image_topic_, lane_frame_topic_, optical_frame_id_;
     bool viewer_{false}, show_preprocess_{true}, viewer_fullscreen_{true};
     bool calibration_verified_{false};
     LaneConfig lane_config_;
@@ -313,10 +356,10 @@ class ObstacleDistanceNode final : public rclcpp::Node
     std::unique_ptr<VisionViewer> display_;
     rclcpp::Publisher<humanoid_interfaces::msg::VisionData>::SharedPtr master_pub_;
     rclcpp::Publisher<msg::ObstacleArray>::SharedPtr output_pub_;
-    rclcpp::Publisher<msg::LaneLine>::SharedPtr lane_pub_;
+    rclcpp::Publisher<msg::LaneLine>::SharedPtr lane_pub_, left_lane_pub_, right_lane_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr lane_mask_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_, mask_pub_, preprocess_pub_;
-    rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr image_sub_;
+    rclcpp::Subscription<msg::LaneFrame>::SharedPtr lane_frame_sub_;
     rclcpp::TimerBase::SharedPtr watchdog_;
     bool have_image_{false}, have_empty_{false};
     SteadyClock::time_point last_received_{}, last_empty_{};

@@ -1,18 +1,56 @@
 ## 실행 방법 
 ```
-cd ~/colcon_ws
-source /opt/ros/jazzy/setup.bash
-colcon build --packages-select insta360_usb_cam robot_vision
 source ~/colcon_ws/install/setup.bash
 ros2 launch robot_vision obstacle_distance.launch.py
 ```
 ```
-v4l2-ctl -d /dev/video4 --set-ctrl=pan_absolute=0 
-v4l2-ctl -d /dev/video4 --set-ctrl=tilt_absolute=-77000
-v4l2-ctl -d /dev/video4 --set-ctrl=zoom_absolute=100
+v4l2-ctl -d /dev/video0 --set-ctrl=pan_absolute=0 
+v4l2-ctl -d /dev/video0 --set-ctrl=tilt_absolute=-77000
+v4l2-ctl -d /dev/video0 --set-ctrl=zoom_absolute=100
 ```
 
 한문단씩 두 터미널에 실행하시면 됩니다. 
+
+## YOLO 좌우 기준선
+
+`obstacle_distance.launch.py`는 Insta360 카메라 → YOLO 추론 노드 → 기존 C++ 계산/화면 노드를 함께 시작한다.
+좌우 기준선은 `weights.pt`의 `left-sideline`/`right-sideline` 분할로 검출한다.
+분할 마스크의 각 행 중심에 직선을 맞추며 좌우 종류는 모델 클래스로 결정한다.
+원본 영상과 선 결과를 같은 `LaneFrame`에 담아 다른 프레임의 좌표가 섞이지 않게 한다.
+
+```bash
+ros2 launch robot_vision obstacle_distance.launch.py weights:=/home/doyeon/Downloads/weights.pt
+# 카메라가 이미 실행 중이면:
+ros2 launch robot_vision obstacle_distance.launch.py start_camera:=false
+```
+
+- `/vision/left_lane_line`, `/vision/right_lane_line`: 각각 `LaneLine`, 검출 여부·원본 좌표·신뢰도.
+- `/vision/lane_line`: 신뢰도가 더 높은 대표 선 하나(기존 구독자 호환).
+- `/vision/lane_mask`: YOLO 분할 마스크.
+- `/vision/yolo_lane_frame`: 해당 원본 JPEG, 좌우 선, 마스크, 추론 시간.
+
+설정은 `config/obstacle_distance.yaml`의 `yolo_lane`에 있다. 기본 신뢰도 0.5, 영상 입력 640, CPU 처리 목표 15FPS.
+1초 넘게 지연된 추론 결과는 버리고, 입력이 끊기면 좌우 선을 무효로 만든다.
+기본 설정은 장애물 행·깊이를 쓰지 않고 YOLO 원본 선 좌표를 왜곡 보정한 다음 실측 지면 좌표로 변환한다. BEV 영상에서 재검출하거나 YOLO를 재학습할 필요가 없다.
+
+시작할 때 로봇 바닥 중심을 왼쪽 기준선에서 **0.7m**에 놓고 카메라 팬·틸트·줌을 저장된 네 점과 같은 상태로 유지한다. 화면에 `locking reference`가 표시되는 동안 로봇을 정지시킨다. 일관된 선 관측 5회로 로봇 기준점을 고정하고 `FIELD X FROM LEFT`가 표시되면 이동한다. 시작부터 선이 없으면 기준점이 잡히지 않으며 결과는 -1000이다.
+
+`left_x_1_dist`는 왼쪽 선에서 로봇까지의 수직 거리, 즉 필드 가로좌표(m)이다. 오른쪽은 `right_x_2_dist`로 전달한다. 한쪽만 보이면 실측 필드 폭 1.4m로 반대쪽을 계산한다. 양쪽이 보일 때 합이 필드 폭과 크게 다르거나 서로 평행하지 않으면 미측정으로 처리한다. 장애물이 없어도 선만 유효하면 좌표가 갱신된다.
+
+양쪽 선 미검출, 해상도 불일치, 보정 영역에 충분한 선 점이 없음, 계산 품질 불량은 미측정(-1000)이다. 카메라 입력이 끊겼다가 돌아와도 이미 고정된 로봇 기준점을 현재 위치로 다시 잡지 않는다. 기준점을 새로 잡으려면 시작 위치로 돌려놓고 노드를 다시 실행한다.
+
+지면 설정은 `obstacle_distance`의 `ground_*`, `field_width_m`, `start_from_left_m`이다. 보정 화면의 네 점과 실측 가로 1.86m, 전방 가까운 경계 1.5m·먼 경계 3.75m를 사용한다. 카메라 또는 장착 위치를 바꾸면 다시 보정해야 한다. 고정 호모그래피는 보행 중 몸체 pitch/roll을 보정하지 않으므로 정지 상태에서 먼저 실측과 대조한 뒤 보행 오차를 확인한다. 초기 버전은 시간 평활화로 지연을 추가하지 않는다.
+
+`ground_field_enabled: false`를 지정하면 비교용 기존 장애물 행 깊이 방식으로 돌아간다. 모델은 직접 미터 거리를 출력하지 않는다.
+
+현재 노트북의 전용 실행 환경은 Codex 프로젝트의 `.venv-line`이다.
+다른 장비에서는 ROS Jazzy와 Python 3.12 가상환경에 torch/torchvision 및 ultralytics를 설치하고,
+`ROBOT_VISION_YOLO_PYTHON=/절대경로/가상환경/bin/python`을 설정한다.
+ROS 패키지를 읽을 수 있게 가상환경을 `--system-site-packages`로 만들고 NumPy 1.x를 사용한다.
+검증한 버전: torch 2.14.1+cpu, torchvision 0.29.1+cpu, ultralytics 8.4.174, numpy 1.26.4, opencv-python 4.11.0.86.
+가중치는 저장소에 포함하지 않으며 `weights` 실행 인자로 지정한다.
+
+통합 화면은 왼쪽 위 결과, 오른쪽 위 마스크, 왼쪽 아래 원본, 오른쪽 아래 BEV로 표시한다. BEV는 거리 계산과 같은 지면 변환을 쓰며 기존 YOLO 선을 파란색(왼쪽)·노란색(오른쪽)으로 옮겨 그린다. 두 축의 미터 축척을 같게 유지하고 0.5m 전방 간격 격자를 표시한다. BEV에서 선을 다시 검출하지 않는다.
 
 ## 현재 ROS2 msg
 
@@ -25,7 +63,7 @@ v4l2-ctl -d /dev/video4 --set-ctrl=zoom_absolute=100
 
 ## 코드 전체 흐름
 
-카메라 영상 -> 빨강, 파랑 색상 마스크 생성 -> 잡음 제거 -> 윤곽선 추출 -> 사각형 조건 검사 -> 거리 계산 -> 토픽 발행 및 윤곽선·거리 라벨 표시
+카메라 영상 -> YOLO 좌우 기준선 추론(원본과 결과를 함께 전달) -> 빨강, 파랑 색상 마스크 생성 -> 잡음 제거 -> 윤곽선 추출 -> 사각형 조건 검사 -> 거리 계산 -> 토픽 발행 및 윤곽선·거리 라벨 표시
 
 색상 영역의 윤곽선은 거리 계산 성공 여부와 관계없이 표시한다. 사각형·거리 조건을 통과한 판에는 거리 라벨을 함께 표시한다.
 
@@ -131,9 +169,9 @@ v4l2-ctl -d /dev/video0 --set-ctrl=pan_absolute=0
 tilt를 돌리고 싶을때 : 
 v4l2-ctl -d /dev/video0 --set-ctrl=tilt_absolute=-50000
 zoom값 확인 : 
-v4l2-ctl -d /dev/video2 --list-ctrls | grep zoom
+v4l2-ctl -d /dev/video0 --list-ctrls | grep zoom
 zoom값 설정(예 : 104) :
-v4l2-ctl -d /dev/video4 --set-ctrl=zoom_absolute=104
+v4l2-ctl -d /dev/video0 --set-ctrl=zoom_absolute=104
 
 
 맨 뒤에 숫자를 바꿔 카메라 각도를 조절할 수 있다.
@@ -163,7 +201,7 @@ ros2 launch insta360_usb_cam usb_cam.launch.py
 
 ```bash
 source ~/colcon_ws/install/setup.bash
-ros2 run robot_vision record_dataset --output "$HOME/colcon_ws/robot_vision_dataset/110_110_100_run01.avi"
+ros2 run robot_vision record_dataset --output "$HOME/colcon_ws/robot_vision_dataset/000_000_000_run01.avi"
 ```
 
 실행하면 640×480 원본 카메라 미리보기 창이 열리고 빨간 `REC`와 저장 프레임 수가 표시됩니다.
@@ -185,7 +223,7 @@ g++ -std=c++17 src/capture_dataset.cpp -o capture_dataset $(pkg-config --cflags 
 ## 파일별 역할
 
 카메라 영상을 받은 뒤 장애물·차선·행을 분석하고, 계산 결과를 로봇용 메시지와 화면에 사용한다.
-검출 기준과 캘리브레이션은 유지하며, 처리 목표는 `max_processing_fps: 30.0`이다.
+장애물 기준과 캘리브레이션을 사용하며, 전체 처리율은 YOLO 처리 속도(기본 목표 15FPS)에 제한된다.
 실제 FPS는 카메라 입력과 처리 시간에 따라 달라진다.
 
 | 파일 | 역할 |
@@ -197,7 +235,8 @@ g++ -std=c++17 src/capture_dataset.cpp -o capture_dataset $(pkg-config --cflags 
 | `vision_viewer.cpp` | 윤곽선·거리·행 표시, 전처리 화면 생성, 통합 창 표시와 키 입력 |
 | `color_region_detector.cpp` | 빨강·파랑 색상 마스크와 영역 후보 추출 |
 | `distance_estimator.cpp` | 판의 위치·거리 추정 및 가려진 판의 검출 복구 |
-| `lane_line_estimator.cpp` | 흰색 바닥 경계선 검출 |
+| `scripts/yolo_lane_node.py`, `scripts/yolo_lane_fit.py` | 원본 프레임의 YOLO 분할과 좌우 중심선 추정 |
+| `lane_line_estimator.cpp` | 이전 검출기의 참조·회귀 검사 코드. 통합 실행에서는 호출하지 않음 |
 | `row_line_estimator.cpp` | 장애물 아래쪽 경계의 행 추정, 여러 프레임의 추적 결과 평활화 |
 | `bev_node.cpp` | 별도 BEV 보정·미리보기 도구 |
 | `record_dataset.cpp` | Insta360 ROS 원본 영상을 640×480 AVI와 프레임 시간 CSV로 녹화 |

@@ -192,6 +192,8 @@ TEST(LaneLineCpp, KeepsLensDistortedStraightBoundaryWithoutRelaxingCurveLimit) {
   cv::Mat image(480, 640, CV_8UC3, cv::Scalar(35, 90, 35));
   cv::polylines(image, std::vector<std::vector<cv::Point>>{pixels}, false, cv::Scalar::all(255), 7);
   robot_vision::LaneConfig config;
+  // This legacy regression specifically tests the tight 2px curve limit.
+  config.max_curve_deviation_px = 2.0;
   config.min_abs_dx_per_dy = 0.1;
   config.min_grass_support = 0.8;
   config.candidate_min_bottom_y_fraction = 0.5;
@@ -209,6 +211,8 @@ TEST(LaneLineCpp, RejectsSemicircleWithCameraCalibration) {
                0, 476.574144, 228.222101, 0, 0, 1);
   cv::Mat d = (cv::Mat_<double>(1, 5) << 0.026101, -0.086354, -0.007248, -0.006668, 0);
   robot_vision::LaneConfig config;
+  // This legacy regression specifically tests the tight 2px curve limit.
+  config.max_curve_deviation_px = 2.0;
   config.min_abs_dx_per_dy = 0.1;
   config.min_grass_support = 0.8;
   config.candidate_min_bottom_y_fraction = 0.5;

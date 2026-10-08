@@ -77,6 +77,7 @@ msg::LaneLine make_lane_message(const std_msgs::msg::Header &header, const LaneR
         lane_message.observed_y_max = line.observed_y_max;
         lane_message.grass_support = static_cast<float>(line.grass_support);
         lane_message.fit_error_px = static_cast<float>(line.fit_error_px);
+        lane_message.confidence = static_cast<float>(line.confidence);
     }
     return lane_message;
 }

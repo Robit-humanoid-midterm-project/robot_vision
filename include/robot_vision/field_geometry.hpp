@@ -13,13 +13,15 @@
 namespace robot_vision {
 
 // 교차점 계산의 진행 상태: 입력 부족, 교차 불가, 깊이 부족, 거리 계산 완료.
-enum class CrossingStatus { no_lane_or_row, no_intersection, no_row_depth, measured };
+enum class CrossingStatus { no_lane_or_row, no_intersection, no_row_depth, measured, waiting_reference, invalid_ground_line };
 
 // 표시용 교차점과 카메라 중앙점, 좌우 거리 값을 저장한다. 미측정 경계 거리는 -1000이다.
 struct FieldGeometryResult {
     CrossingStatus status{CrossingStatus::no_lane_or_row};
     std::optional<cv::Point2d> crossing;
+    std::optional<cv::Point2d> left_crossing, right_crossing;
     std::optional<cv::Point> principal;
+    bool ground_based{false};
     double lateral_m{0.0};
     double left_distance_m{-1000.0};
     double right_distance_m{-1000.0};

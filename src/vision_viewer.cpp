@@ -98,10 +98,15 @@ void draw_distance_label(cv::Mat &canvas, const Detection &detection, const std:
 // 경계 거리 계산의 성공·실패 상태를 화면 설명으로 바꾼다. 계산을 새로 수행하지 않는다.
 std::string crossing_note(const FieldGeometryResult &geometry, const std::string &side)
 {
+    if (geometry.ground_based && geometry.status == CrossingStatus::measured)
+        return "FIELD X FROM LEFT: " + two_decimals(geometry.left_distance_m) +
+            " m | RIGHT: " + two_decimals(geometry.right_distance_m) + " m";
     switch (geometry.status) {
     case CrossingStatus::no_lane_or_row: return "CROSS: no lane/row";
     case CrossingStatus::no_intersection: return "CROSS: no valid intersection";
     case CrossingStatus::no_row_depth: return "CROSS " + side + ": no row depth";
+    case CrossingStatus::waiting_reference: return "FIELD: keep start pose, locking reference";
+    case CrossingStatus::invalid_ground_line: return "FIELD: no valid ground line";
     case CrossingStatus::measured: break;
     }
     std::string note = "CROSS " + side + " | lateral ~" +
@@ -142,9 +147,10 @@ cv::Mat VisionViewer::annotate(const cv::Mat &frame, const VisionFrameResult &fr
     const auto &row_lines = frame_result.rows;
     // 표시 도형이 검출 결과나 원본 영상에 섞이지 않도록 독립된 복사본을 만든다.
     cv::Mat canvas = frame.clone();
-    if (lane.best.valid) {
-        const auto &line = lane.best;
-        const cv::Scalar color = line.side == "left" ? cv::Scalar(255, 255, 0) : cv::Scalar(255, 0, 255);
+    for (const auto *candidate : {&lane.left, &lane.right}) {
+        if (!candidate->valid) continue;
+        const auto &line = *candidate;
+        const cv::Scalar color = line.side == "left" ? cv::Scalar(255, 180, 0) : cv::Scalar(0, 220, 255);
         const cv::Point2f delta = line.bottom - line.top;
         const double length = cv::norm(delta);
         if (length > 0)
@@ -205,6 +211,9 @@ cv::Mat VisionViewer::annotate(const cv::Mat &frame, const VisionFrameResult &fr
         draw_distance_label(canvas, result.detections[index],
                             frame_result.ground_projections.at(index), distance_labels);
     const std::string crossing_note = robot_vision::crossing_note(geometry, lane.best.side);
+    for (const auto &point : {geometry.left_crossing, geometry.right_crossing})
+        if (point) cv::drawMarker(canvas, *point, cv::Scalar(255, 255, 255),
+                                  cv::MARKER_CROSS, 18, 2, cv::LINE_AA);
     cv::rectangle(canvas, {0, 0}, {canvas.cols, 46}, cv::Scalar(20, 20, 20), cv::FILLED);
     cv::putText(canvas, "COLOR CONTOURS", {8, 18}, cv::FONT_HERSHEY_SIMPLEX, 0.48, cv::Scalar(0, 220, 255), 1,
                 cv::LINE_AA);
@@ -212,7 +221,9 @@ cv::Mat VisionViewer::annotate(const cv::Mat &frame, const VisionFrameResult &fr
                 "Visible regions: " + std::to_string(result.image_candidates.size()) +
                     " | row lines: " + std::to_string(row_lines.size()),
                 {8, 37}, cv::FONT_HERSHEY_SIMPLEX, 0.39, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
-    const std::string lane_note = lane.best.valid ? ("LANE " + lane.best.side) : "LANE not detected";
+    const std::string lane_note = "YOLO L " +
+        (lane.left.valid ? two_decimals(lane.left.confidence) : "N/A") + " R " +
+        (lane.right.valid ? two_decimals(lane.right.confidence) : "N/A");
     cv::putText(canvas, lane_note + " | GREEN/YELLOW = base/row", {8, 62}, cv::FONT_HERSHEY_SIMPLEX, 0.39,
                 cv::Scalar(0, 0, 0), 3, cv::LINE_AA);
     cv::putText(canvas, lane_note + " | GREEN/YELLOW = base/row", {8, 62}, cv::FONT_HERSHEY_SIMPLEX, 0.39,
@@ -227,51 +238,19 @@ cv::Mat VisionViewer::annotate(const cv::Mat &frame, const VisionFrameResult &fr
 // 세 영역의 영상을 하나의 통합 화면으로 구성한다.
 // 창 크기와 FPS 제목을 설정하고 F/ESC 키로 전체 화면을 전환한다.
 void VisionViewer::show_dashboard(const cv::Mat &raw, const cv::Mat &white_mask, const cv::Mat &obstacle_mask,
-                    const cv::Mat &annotated)
+                    const cv::Mat &annotated, const cv::Mat &bev)
 {
     if (!viewer_)
         return;
     if (!window_initialized_)
     {
         cv::namedWindow(window_name_, cv::WINDOW_NORMAL);
-        cv::resizeWindow(window_name_, 1200, 626);
+        cv::resizeWindow(window_name_, 1280, 1012);
         cv::setWindowProperty(window_name_, cv::WND_PROP_FULLSCREEN,
                               viewer_fullscreen_ ? cv::WINDOW_FULLSCREEN : cv::WINDOW_NORMAL);
         window_initialized_ = true;
     }
-    // Keep the annotated image large so contours stay readable.
-    // The header sits outside the image and does not cover its status banner.
-    cv::Mat dashboard(626, 1200, CV_8UC3, cv::Scalar(18, 18, 18));
-    cv::Mat large_annotated, small_raw, combined_mask;
-    // 검출 결과를 크게, 원본과 마스크를 작게 배치한다. 이 크기 변경은 화면 표시용이다.
-    cv::resize(annotated, large_annotated, {800, 600}, 0, 0, cv::INTER_CUBIC);
-    cv::resize(raw, small_raw, {400, 300}, 0, 0, cv::INTER_AREA);
-    if (!obstacle_mask.empty() && obstacle_mask.type() == CV_8UC3 && obstacle_mask.size() == raw.size())
-    {
-        combined_mask = obstacle_mask.clone();
-    }
-    else
-    {
-        combined_mask = cv::Mat::zeros(raw.size(), CV_8UC3);
-    }
-    if (!white_mask.empty() && white_mask.type() == CV_8UC1 && white_mask.size() == raw.size())
-    {
-        // 흰색 경계선 마스크를 색상 장애물 마스크 위에 흰색으로 겹쳐 표시한다.
-        combined_mask.setTo(cv::Scalar::all(255), white_mask);
-    }
-    cv::resize(combined_mask, combined_mask, {400, 300}, 0, 0, cv::INTER_NEAREST);
-    large_annotated.copyTo(dashboard(cv::Rect(0, 26, 800, 600)));
-    combined_mask.copyTo(dashboard(cv::Rect(800, 26, 400, 300)));
-    small_raw.copyTo(dashboard(cv::Rect(800, 326, 400, 300)));
-    auto label = [&](const std::string &name, int x, int y) {
-        cv::putText(dashboard, name, {x + 6, y + 19}, cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(255, 255, 255), 1,
-                    cv::LINE_AA);
-    };
-    label(processing_fps_ > 0 ? "ANNOTATED RESULT | " + two_decimals(processing_fps_) + " FPS" :
-                              "ANNOTATED RESULT", 0, 0);
-    label("OPENCV MASK", 800, 0);
-    cv::rectangle(dashboard, {800, 326}, {990, 352}, cv::Scalar(20, 20, 20), cv::FILLED);
-    label("RAW CAMERA", 800, 326);
+    const cv::Mat dashboard = dashboard_view(raw, white_mask, obstacle_mask, annotated, bev);
     cv::imshow(window_name_, dashboard);
     // OpenCV 창의 이벤트를 처리하고 키를 읽는다. 이 대기·표시 시간도 성능 로그에 포함된다.
     const int key = cv::waitKey(1) & 0xff;
@@ -281,8 +260,37 @@ void VisionViewer::show_dashboard(const cv::Mat &raw, const cv::Mat &white_mask,
         cv::setWindowProperty(window_name_, cv::WND_PROP_FULLSCREEN,
                               viewer_fullscreen_ ? cv::WINDOW_FULLSCREEN : cv::WINDOW_NORMAL);
         if (!viewer_fullscreen_)
-            cv::resizeWindow(window_name_, 1200, 626);
+            cv::resizeWindow(window_name_, 1280, 1012);
     }
+}
+
+cv::Mat VisionViewer::dashboard_view(const cv::Mat &raw, const cv::Mat &white_mask,
+    const cv::Mat &obstacle_mask, const cv::Mat &annotated, const cv::Mat &bev) const
+{
+    cv::Mat dashboard(1012, 1280, CV_8UC3, cv::Scalar(18,18,18));
+    const auto panel = [&](const cv::Mat &image, int x, int y, const std::string &title) {
+        cv::putText(dashboard,title,{x+8,y+19},cv::FONT_HERSHEY_SIMPLEX,0.55,{255,255,255},1,cv::LINE_AA);
+        if (image.empty()) {
+            cv::putText(dashboard,"NO IMAGE / BEV DISABLED",{x+80,y+260},
+                        cv::FONT_HERSHEY_SIMPLEX,0.6,{0,200,255},1,cv::LINE_AA);
+            return;
+        }
+        const double ratio=std::min(640.0/image.cols,480.0/image.rows);
+        cv::Mat fitted;
+        cv::resize(image,fitted,{cvRound(image.cols*ratio),cvRound(image.rows*ratio)},0,0,cv::INTER_AREA);
+        fitted.copyTo(dashboard(cv::Rect(x+(640-fitted.cols)/2,y+26+(480-fitted.rows)/2,fitted.cols,fitted.rows)));
+    };
+    cv::Mat combined_mask;
+    if (!obstacle_mask.empty() && obstacle_mask.type()==CV_8UC3 && obstacle_mask.size()==raw.size())
+        combined_mask=obstacle_mask.clone();
+    else combined_mask=cv::Mat::zeros(raw.size(),CV_8UC3);
+    if (!white_mask.empty() && white_mask.type()==CV_8UC1 && white_mask.size()==raw.size())
+        combined_mask.setTo(cv::Scalar::all(255),white_mask);
+    panel(annotated,0,0,processing_fps_>0 ? "RESULT | "+two_decimals(processing_fps_)+" FPS" : "RESULT");
+    panel(combined_mask,640,0,"YOLO + COLOR MASK");
+    panel(raw,0,506,"RAW CAMERA");
+    panel(bev,640,506,"BEV | YOLO LEFT: BLUE / RIGHT: YELLOW | GRID: 0.5m");
+    return dashboard;
 }
 
 // 빨강·파랑 마스크의 잡음 제거 전후를 나란히 배치하고 HSV 기준·검출 통계를 표시한다.
@@ -364,13 +372,13 @@ cv::Mat VisionViewer::no_image_preprocess() const
 
 // 켜진 전처리 창과 통합 창을 갱신한다. 로컬 viewer가 꺼져 있으면 창을 표시하지 않는다.
 void VisionViewer::show(const cv::Mat &raw, const cv::Mat &white_mask, const cv::Mat &obstacle_mask,
-                        const cv::Mat &annotated, const cv::Mat &preprocess)
+                        const cv::Mat &annotated, const cv::Mat &preprocess, const cv::Mat &bev)
 {
     if (viewer_ && show_preprocess_) {
         cv::imshow(preprocess_window_name_, preprocess);
         preprocess_initialized_ = true;
     }
-    show_dashboard(raw, white_mask, obstacle_mask, annotated);
+    show_dashboard(raw, white_mask, obstacle_mask, annotated, bev);
 }
 
 } // namespace robot_vision

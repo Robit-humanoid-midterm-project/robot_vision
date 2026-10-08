@@ -3,6 +3,7 @@
 #pragma once
 
 #include "robot_vision/vision_frame_result.hpp"
+#include "robot_vision/ground_field_estimator.hpp"
 
 namespace robot_vision {
 
@@ -19,13 +20,15 @@ class VisionPipeline {
   public:
     // 보정·색상·차선·행 설정을 받아 계산기와 추적기를 준비한다.
     VisionPipeline(DetectorConfig detector, LaneConfig lane, double camera_height_m,
-                   RowTrackerConfig rows = {});
+                   RowTrackerConfig rows = {}, std::optional<GroundFieldConfig> ground = std::nullopt);
     // BGR 영상의 장애물 결과를 만든다. 이어 complete()로 나머지 계산을 채운다.
     VisionFrameResult detect_obstacles(const cv::Mat &frame) const;
     // 전달된 프레임 결과에 차선·행·경계 거리·바닥 투영을 추가한다.
-    void complete(const cv::Mat &frame, VisionFrameResult &result);
+    void complete(const cv::Mat &frame, VisionFrameResult &result,
+                  const LaneResult &lanes = {});
     // 영상 끊김 후 기존 행 이력을 버리는 외부 호출용 인터페이스이다.
     void reset_tracking();
+    cv::Mat bev_preview(const cv::Mat &raw, const LaneResult &lanes) const;
 
   private:
     DetectorConfig detector_config_;
@@ -34,6 +37,7 @@ class VisionPipeline {
     cv::Mat lane_camera_matrix_, lane_distortion_;
     DistanceEstimator estimator_;
     RowLineTracker row_tracker_;
+    std::optional<GroundFieldEstimator> ground_estimator_;
 };
 
 } // namespace robot_vision

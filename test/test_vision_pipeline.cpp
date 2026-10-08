@@ -108,6 +108,68 @@ TEST(FieldGeometry, KeepsUnknownDistancesWithoutDepthOrOutsideWidth)
     EXPECT_EQ(outside.right_distance_m, -1000);
 }
 
+TEST(FieldGeometry, MeasuresBothModelBoundariesIndependently)
+{
+    auto lanes = left_lane();
+    lanes.left = lanes.best;
+    lanes.left.confidence = 0.9;
+    lanes.left.observed_y_min = 100;
+    lanes.left.observed_y_max = 400;
+    lanes.right = lanes.left;
+    lanes.right.side = "right";
+    lanes.right.top = {450, 100};
+    lanes.right.bottom = {450, 400};
+    DetectResult obstacles;
+    obstacles.detections = {obstacle_at_row(350, 2)};
+    const std::vector<RowLine> rows{{{0, 350}, {639, 350}}};
+    const auto result = estimate_field_geometry(obstacles, lanes, rows, {640, 480}, simple_camera());
+    EXPECT_NEAR(result.left_distance_m, 0.5466666667, 1e-6);
+    EXPECT_NEAR(result.right_distance_m, 0.52, 1e-6);
+    ASSERT_TRUE(result.left_crossing);
+    ASSERT_TRUE(result.right_crossing);
+    // A detected right stripe without a measurable crossing uses the left measurement.
+    lanes.right.observed_y_max = 300;
+    const auto hidden = estimate_field_geometry(obstacles, lanes, rows, {640, 480}, simple_camera());
+    EXPECT_GT(hidden.left_distance_m, 0);
+    EXPECT_NEAR(hidden.right_distance_m, 1.4 - hidden.left_distance_m, 1e-9);
+    const auto message = make_master_message(msg::ObstacleArray{}, false, hidden.left_distance_m, hidden.right_distance_m);
+    EXPECT_NEAR(message.right_x_2_dist, 1.4 - hidden.left_distance_m, 1e-9);
+    // The same fallback applies with left/right reversed.
+    lanes.right.observed_y_max = 400;
+    lanes.left.observed_y_max = 300;
+    const auto left_hidden = estimate_field_geometry(obstacles, lanes, rows, {640, 480}, simple_camera());
+    EXPECT_NEAR(left_hidden.right_distance_m, 0.52, 1e-6);
+    EXPECT_NEAR(left_hidden.left_distance_m, 0.88, 1e-6);
+    lanes.right.observed_y_max = 300;
+    const auto both_hidden = estimate_field_geometry(obstacles, lanes, rows, {640, 480}, simple_camera());
+    EXPECT_EQ(both_hidden.left_distance_m, -1000);
+    EXPECT_EQ(both_hidden.right_distance_m, -1000);
+    const auto mismatch = estimate_field_geometry(obstacles, lanes, rows, {320, 240}, simple_camera());
+    EXPECT_EQ(mismatch.left_distance_m, -1000);
+    EXPECT_EQ(mismatch.right_distance_m, -1000);
+}
+
+TEST(VisionPipeline, UsesInjectedModelLanesAndClearsMissingDetections)
+{
+    VisionPipeline pipeline(DetectorConfig{}, LaneConfig{}, 0.61);
+    cv::Mat frame(480, 640, CV_8UC3, cv::Scalar::all(0));
+    auto lanes = left_lane();
+    lanes.left = lanes.best;
+    lanes.left.confidence = 0.91;
+    auto result = pipeline.detect_obstacles(frame);
+    pipeline.complete(frame, result, lanes);
+    EXPECT_TRUE(result.lane.left.valid);
+    const std_msgs::msg::Header header;
+    EXPECT_FLOAT_EQ(make_lane_message(header, lanes).confidence, 0);
+    lanes.best = lanes.left;
+    EXPECT_FLOAT_EQ(make_lane_message(header, lanes).confidence, 0.91);
+    pipeline.complete(frame, result);
+    EXPECT_FALSE(result.lane.left.valid);
+    EXPECT_FALSE(result.lane.right.valid);
+    EXPECT_FALSE(result.lane.best.valid);
+    EXPECT_EQ(cv::countNonZero(result.lane.mask), 0);
+}
+
 // 전방 1.5m 미만의 유효한 장애물 중 가까운 세 개를 선택하고 끊김이면 -1000을 보내는지 확인한다.
 TEST(VisionMessages, SelectsThreeNearestValidObstaclesAndUsesUnknownOnTimeout)
 {
