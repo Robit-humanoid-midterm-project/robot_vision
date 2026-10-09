@@ -6,9 +6,10 @@
 #include <vector>
 
 namespace robot_vision {
-BoundaryDistanceSelector::BoundaryDistanceSelector(double field_width_m) : width_m_(field_width_m)
+BoundaryDistanceSelector::BoundaryDistanceSelector(double field_width_m, double left_offset_m)
+    : width_m_(field_width_m), left_offset_m_(left_offset_m)
 {
-    if (!std::isfinite(width_m_) || width_m_ <= 0)
+    if (!std::isfinite(width_m_) || width_m_ <= 0 || !std::isfinite(left_offset_m_))
         throw std::invalid_argument("Field width must be finite and positive");
 }
 
@@ -48,8 +49,10 @@ BoundarySelection BoundaryDistanceSelector::select(
     output.source = g ? BoundarySource::ground : BoundarySource::crossing;
     output.geometry = g ? ground : crossing;
     const double left = g ? *output.ground_median_m : *output.crossing_median_m;
-    output.geometry.left_distance_m = left;
-    output.geometry.right_distance_m = width_m_ - left;
+    // Apply once after source selection/smoothing; keep diagnostic medians raw.
+    const double corrected = std::clamp(left + left_offset_m_, 0.0, width_m_);
+    output.geometry.left_distance_m = corrected;
+    output.geometry.right_distance_m = width_m_ - corrected;
     return output;
 }
 

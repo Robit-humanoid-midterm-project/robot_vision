@@ -20,7 +20,8 @@ class VisionPipeline {
   public:
     // 보정·색상·차선·행 설정을 받아 계산기와 추적기를 준비한다.
     VisionPipeline(DetectorConfig detector, LaneConfig lane, double camera_height_m,
-                   RowTrackerConfig rows = {}, std::optional<GroundFieldConfig> ground = std::nullopt);
+                   RowTrackerConfig rows = {}, std::optional<GroundFieldConfig> ground = std::nullopt,
+                   double boundary_left_offset_m = 0.0);
     // BGR 영상의 장애물 결과를 만든다. 이어 complete()로 나머지 계산을 채운다.
     VisionFrameResult detect_obstacles(const cv::Mat &frame) const;
     // 전달된 프레임 결과에 차선·행·경계 거리·바닥 투영을 추가한다.

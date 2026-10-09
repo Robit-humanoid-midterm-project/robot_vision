@@ -35,6 +35,8 @@ obstacle_distance:
     field_width_m: 1.4
     start_from_left_m: 0.7
     ground_reference_frames: 5
+    # 최종 좌우 출력 보정: 왼쪽 +5cm, 오른쪽 -5cm.
+    boundary_left_offset_m: 0.05
 
     # 현장에서 조정하는 색상 HSV 및 최소 면적 (px²)
     red_lower_1: [0, 60, 60]

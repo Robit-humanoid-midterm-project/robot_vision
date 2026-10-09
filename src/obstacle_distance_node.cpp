@@ -135,7 +135,8 @@ class ObstacleDistanceNode final : public rclcpp::Node
             RCLCPP_INFO(get_logger(), "Ground field coordinate enabled: start %.2fm from left; keep robot stationary until reference locks", ground->start_from_left_m);
         }
         pipeline_ = std::make_unique<VisionPipeline>(config, lane_config_, camera_height_m_,
-            RowTrackerConfig{row_smoothing_frames, row_match_y_px, row_match_slope, row_track_max_missing_frames}, ground);
+            RowTrackerConfig{row_smoothing_frames, row_match_y_px, row_match_slope, row_track_max_missing_frames}, ground,
+            declare_parameter<double>("boundary_left_offset_m", 0.0, fixed));
         display_ = std::make_unique<VisionViewer>(config, viewer_, show_preprocess_, viewer_fullscreen_);
 
         // 영상은 오래된 프레임이 쌓이지 않도록 최신 한 장만 대기시킨다. 제어 토픽의 설정은 별도로 유지한다.

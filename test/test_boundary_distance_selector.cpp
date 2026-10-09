@@ -69,3 +69,23 @@ TEST(BoundarySelector, ConvertsRightOnlyAndNeverClampsInvalidDistances) {
     EXPECT_EQ(selector.select(bad,{}).source,BoundarySource::none);
 }
 } // namespace
+
+TEST(BoundaryOffset, CorrectsBothSourcesAndRightOnlyWithoutChangingRawMedians) {
+    BoundaryDistanceSelector s(1.4,0.05);
+    auto g=measured(0.15,true);
+    auto out=s.select(g,{});
+    EXPECT_NEAR(out.geometry.left_distance_m,0.20,1e-12);
+    EXPECT_NEAR(out.geometry.right_distance_m,1.20,1e-12);
+    EXPECT_NEAR(*out.ground_median_m,0.15,1e-12);
+    s.reset();
+    auto right=measured(-1000); right.right_distance_m=0.28;
+    out=s.select({},right);
+    EXPECT_NEAR(out.geometry.left_distance_m,1.17,1e-12);
+    EXPECT_NEAR(out.geometry.right_distance_m,0.23,1e-12);
+    out=s.select({},{});
+    EXPECT_EQ(out.geometry.left_distance_m,-1000);
+    EXPECT_EQ(out.geometry.right_distance_m,-1000);
+    out=s.select(measured(1.39,true),{});
+    EXPECT_DOUBLE_EQ(out.geometry.left_distance_m,1.4);
+    EXPECT_DOUBLE_EQ(out.geometry.right_distance_m,0.0);
+}

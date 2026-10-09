@@ -11,11 +11,11 @@ namespace robot_vision {
 
 // 검출 설정과 카메라 높이를 보관하고 거리 추정기·행 추적기를 초기화한다.
 VisionPipeline::VisionPipeline(DetectorConfig detector, LaneConfig lane, double camera_height_m,
-                               RowTrackerConfig rows, std::optional<GroundFieldConfig> ground)
+                               RowTrackerConfig rows, std::optional<GroundFieldConfig> ground, double boundary_left_offset_m)
     : detector_config_(std::move(detector)), lane_config_(std::move(lane)),
       camera_height_m_(camera_height_m), estimator_(detector_config_),
       row_tracker_(rows.history_frames, rows.match_y_px, rows.match_slope, rows.max_missing_frames),
-      boundary_selector_(ground ? ground->field_width_m : 1.4)
+      boundary_selector_(ground ? ground->field_width_m : 1.4, boundary_left_offset_m)
 {
     if (ground) ground_estimator_.emplace(detector_config_, std::move(*ground));
     // 장애물 거리 계산과 동일한 기존 보정값을 사용한다. 별도 보정 설정을 만들지 않는다.
