@@ -21,6 +21,9 @@ struct FieldGeometryResult {
     std::optional<cv::Point2d> crossing;
     std::optional<cv::Point2d> left_crossing, right_crossing;
     std::optional<cv::Point> principal;
+    // Ground line equation X = a*Y + b; diagnostic values before distance smoothing.
+    std::optional<cv::Point2d> ground_left_ab, ground_right_ab;
+    std::optional<double> ground_robot_x_m;
     bool ground_based{false};
     double lateral_m{0.0};
     double left_distance_m{-1000.0};

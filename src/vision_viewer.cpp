@@ -247,6 +247,25 @@ cv::Mat VisionViewer::annotate(const cv::Mat &frame, const VisionFrameResult &fr
                 cv::Scalar(0, 0, 0), 3, cv::LINE_AA);
     cv::putText(canvas, comparison_note, {8, 100}, cv::FONT_HERSHEY_SIMPLEX, 0.40,
                 cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+    // Show the exact ground fit used by the estimator, not a second display-only fit.
+    const auto &ground = frame_result.ground_geometry;
+    const auto coefficients = [](const std::optional<cv::Point2d> &ab) {
+        if (!ab) return std::string("N/A");
+        std::ostringstream out;
+        out << std::fixed << std::setprecision(4) << "a=" << ab->x << " b=" << ab->y << "m";
+        return out.str();
+    };
+    const std::vector<std::string> fit_notes{
+        "GROUND X=aY+b | origin X: " + (ground.ground_robot_x_m ?
+            two_decimals(*ground.ground_robot_x_m) + "m" : "LOCKING/N/A"),
+        "L: " + coefficients(ground.ground_left_ab) + " | R: " + coefficients(ground.ground_right_ab)};
+    for (size_t i = 0; i < fit_notes.size(); ++i) {
+        const cv::Point position(8, 119 + int(i)*19);
+        cv::putText(canvas, fit_notes[i], position, cv::FONT_HERSHEY_SIMPLEX, 0.37,
+                    cv::Scalar(0, 0, 0), 3, cv::LINE_AA);
+        cv::putText(canvas, fit_notes[i], position, cv::FONT_HERSHEY_SIMPLEX, 0.37,
+                    cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+    }
     return canvas;
 }
 

@@ -131,6 +131,8 @@ FieldGeometryResult GroundFieldEstimator::estimate(const LaneResult &lanes, cv::
         lanes.best.side == "left" ? lanes.best : LaneLine{});
     const auto right = project(lanes.right.valid ? lanes.right :
         lanes.best.side == "right" ? lanes.best : LaneLine{});
+    if (left) result.ground_left_ab = cv::Point2d(left->slope, left->intercept);
+    if (right) result.ground_right_ab = cv::Point2d(right->slope, right->intercept);
     if (!left && !right) { clear_pending_reference(); return result; }
     if (!ready_) {
         result.status = CrossingStatus::waiting_reference;
@@ -146,6 +148,7 @@ FieldGeometryResult GroundFieldEstimator::estimate(const LaneResult &lanes, cv::
         if (++samples_ < config_.reference_frames) return result;
         ready_ = true;
     }
+    result.ground_robot_x_m = robot_x_;
     const double dl = left ? (robot_x_ - left->intercept) / left->norm : -1000;
     const double dr = right ? (right->intercept - robot_x_) / right->norm : -1000;
     const auto valid = [&](double d) { return std::isfinite(d) && d >= 0 && d <= config_.field_width_m; };
