@@ -268,3 +268,23 @@ TEST(VisionPipeline, RunsCrossingFallbackWhileGroundReferenceIsLocking) {
     EXPECT_EQ(result.geometry.right_distance_m,-1000);
 }
 } // namespace
+
+TEST(BottomRatio, IncludesClippedColoursAndUsesExactThreeRegions) {
+    robot_vision::DetectorConfig config;
+    robot_vision::VisionPipeline pipeline(config,robot_vision::LaneConfig{},0.61);
+    cv::Mat frame(480,640,CV_8UC3,cv::Scalar::all(0));
+    frame(cv::Rect(0,475,213,5)).setTo(cv::Scalar(0,0,255));
+    frame(cv::Rect(213,475,107,5)).setTo(cv::Scalar(255,0,0));
+    const auto result=pipeline.detect_obstacles(frame);
+    EXPECT_DOUBLE_EQ(result.obstacle_ratio[0],1.0);
+    EXPECT_DOUBLE_EQ(result.obstacle_ratio[1],0.5);
+    EXPECT_DOUBLE_EQ(result.obstacle_ratio[2],0.0);
+    ASSERT_TRUE(result.obstacles.detections.empty());
+    const auto message=robot_vision::make_master_message(robot_vision::msg::ObstacleArray{},false,
+        -1000,-1000,result.obstacle_ratio);
+    EXPECT_EQ(message.obstacle_ratio,result.obstacle_ratio);
+    const auto timeout=robot_vision::make_master_message(robot_vision::msg::ObstacleArray{},true,
+        -1000,-1000,result.obstacle_ratio);
+    EXPECT_DOUBLE_EQ(timeout.frame_drop,1.0);
+    for(double value:timeout.obstacle_ratio) EXPECT_DOUBLE_EQ(value,-1000.0);
+}

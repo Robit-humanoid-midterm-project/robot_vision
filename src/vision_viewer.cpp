@@ -266,6 +266,21 @@ cv::Mat VisionViewer::annotate(const cv::Mat &frame, const VisionFrameResult &fr
         cv::putText(canvas, fit_notes[i], position, cv::FONT_HERSHEY_SIMPLEX, 0.37,
                     cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
     }
+    if (canvas.cols >= 3 && canvas.rows >= 5) {
+        const int side = canvas.cols/3;
+        const int bounds[] = {0,side,canvas.cols-side,canvas.cols};
+        std::string note = "BOTTOM 5px L/C/R:";
+        for (int i=0; i<3; ++i) {
+            cv::rectangle(canvas, {bounds[i],canvas.rows-5},
+                {bounds[i+1]-1,canvas.rows-1}, cv::Scalar(0,255,255), 1);
+            note += " " + (frame_result.obstacle_ratio[i]>=0 ?
+                two_decimals(frame_result.obstacle_ratio[i]) : "N/A");
+        }
+        cv::putText(canvas, note, {8,canvas.rows-12}, cv::FONT_HERSHEY_SIMPLEX, 0.45,
+                    cv::Scalar(0,0,0), 3, cv::LINE_AA);
+        cv::putText(canvas, note, {8,canvas.rows-12}, cv::FONT_HERSHEY_SIMPLEX, 0.45,
+                    cv::Scalar(0,255,255), 1, cv::LINE_AA);
+    }
     return canvas;
 }
 

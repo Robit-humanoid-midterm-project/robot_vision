@@ -30,6 +30,19 @@ VisionFrameResult VisionPipeline::detect_obstacles(const cv::Mat &frame) const
 {
     VisionFrameResult result;
     result.obstacles = estimator_.detect(frame);
+    const auto &red = result.obstacles.colors[0].raw_mask;
+    const auto &blue = result.obstacles.colors[1].raw_mask;
+    if (frame.cols >= 3 && !red.empty() && !blue.empty()) {
+        cv::Mat occupied;
+        cv::bitwise_or(red, blue, occupied);
+        const int h = std::min(5, frame.rows);
+        const int side = frame.cols / 3;
+        const int bounds[] = {0, side, frame.cols-side, frame.cols};
+        for (int i=0; i<3; ++i) {
+            const cv::Rect roi(bounds[i], frame.rows-h, bounds[i+1]-bounds[i], h);
+            result.obstacle_ratio[i] = double(cv::countNonZero(occupied(roi))) / roi.area();
+        }
+    }
     return result;
 }
 

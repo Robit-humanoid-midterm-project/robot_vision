@@ -322,7 +322,7 @@ class ObstacleDistanceNode final : public rclcpp::Node
         append_obstacle_detections(array, result);
         // Deliver control data before debug rendering and local GUI work.
         master_pub_->publish(make_master_message(array, false,
-            result.geometry.left_distance_m, result.geometry.right_distance_m));
+            result.geometry.left_distance_m, result.geometry.right_distance_m, result.obstacle_ratio));
         output_pub_->publish(array);
 
         // 이하 영상은 디버깅용이다. 요청된 토픽과 켜진 로컬 화면에 필요한 영상만 만든다.

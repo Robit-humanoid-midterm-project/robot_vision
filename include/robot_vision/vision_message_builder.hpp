@@ -22,6 +22,7 @@ msg::LaneLine make_lane_message(const std_msgs::msg::Header &header, const LaneR
 // 좌우 경계 거리와 유효한 가까운 장애물 최대 세 개를 로봇 제어 메시지로 구성한다.
 humanoid_interfaces::msg::VisionData make_master_message(
     const msg::ObstacleArray &array, bool frame_drop,
-    double left_distance = -1000.0, double right_distance = -1000.0);
+    double left_distance = -1000.0, double right_distance = -1000.0,
+    std::array<double, 3> obstacle_ratio = {{-1000.0, -1000.0, -1000.0}});
 
 } // namespace robot_vision
