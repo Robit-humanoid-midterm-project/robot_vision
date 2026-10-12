@@ -15,6 +15,8 @@ namespace robot_vision {
 struct VisionFrameResult {
     // 영상 후보와 실제 거리 검출 결과. 후보가 있다고 반드시 판의 거리가 계산된 것은 아니다.
     DetectResult obstacles;
+    // 전체 영상에서 테두리 표시 조건을 만족하는 빨강 또는 파랑 영역이 있는지 여부.
+    bool red_blue_visible{false};
     // Raw red OR blue occupancy in the bottom five rows, left/centre/right.
     std::array<double, 3> obstacle_ratio{{-1000.0, -1000.0, -1000.0}};
     // YOLO 좌우 경계선과 원본 영상 크기의 분할 마스크.

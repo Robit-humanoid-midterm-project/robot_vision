@@ -32,6 +32,8 @@ VisionFrameResult VisionPipeline::detect_obstacles(const cv::Mat &frame) const
     result.obstacles = estimator_.detect(frame);
     const auto &red = result.obstacles.colors[0].raw_mask;
     const auto &blue = result.obstacles.colors[1].raw_mask;
+    // 화면에 테두리를 그리는 색상 후보와 동일한 조건을 사용한다.
+    result.red_blue_visible = !result.obstacles.image_candidates.empty();
     if (frame.cols >= 3 && !red.empty() && !blue.empty()) {
         cv::Mat occupied;
         cv::bitwise_or(red, blue, occupied);

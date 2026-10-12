@@ -288,3 +288,32 @@ TEST(BottomRatio, IncludesClippedColoursAndUsesExactThreeRegions) {
     EXPECT_DOUBLE_EQ(timeout.frame_drop,1.0);
     for(double value:timeout.obstacle_ratio) EXPECT_DOUBLE_EQ(value,-1000.0);
 }
+
+TEST(RedBlueVisibility, WholeFrameColoursWithoutDistanceOrLines) {
+    robot_vision::VisionPipeline pipeline(robot_vision::DetectorConfig{}, robot_vision::LaneConfig{}, 0.61);
+    for (const auto colour : {cv::Scalar(0,0,255), cv::Scalar(255,0,0)}) {
+        cv::Mat frame(480,640,CV_8UC3,cv::Scalar::all(0));
+        frame(cv::Rect(100,50,30,30)).setTo(colour);
+        const auto result = pipeline.detect_obstacles(frame);
+        EXPECT_TRUE(result.red_blue_visible);
+        const auto message = robot_vision::make_master_message(robot_vision::msg::ObstacleArray{}, false, -1000, -1000,
+            result.obstacle_ratio, result.red_blue_visible);
+        EXPECT_DOUBLE_EQ(message.isredblue, 1.0);
+    }
+    // HSV 색상 픽셀이 있어도 테두리의 최소 면적을 만족하지 못하면 0을 보낸다.
+    for (const auto colour : {cv::Scalar(0,0,255), cv::Scalar(255,0,0)}) {
+        cv::Mat frame(480,640,CV_8UC3,cv::Scalar::all(0));
+        frame(cv::Rect(100,50,20,20)).setTo(colour);
+        const auto small = pipeline.detect_obstacles(frame);
+        EXPECT_TRUE(small.obstacles.image_candidates.empty());
+        EXPECT_FALSE(small.red_blue_visible);
+        EXPECT_DOUBLE_EQ(robot_vision::make_master_message(robot_vision::msg::ObstacleArray{},
+            false, -1000, -1000, small.obstacle_ratio, small.red_blue_visible).isredblue, 0.0);
+    }
+    const auto empty = pipeline.detect_obstacles(cv::Mat(480,640,CV_8UC3,cv::Scalar::all(0)));
+    EXPECT_FALSE(empty.red_blue_visible);
+    EXPECT_DOUBLE_EQ(robot_vision::make_master_message(robot_vision::msg::ObstacleArray{}, false, -1000, -1000,
+        empty.obstacle_ratio, empty.red_blue_visible).isredblue, 0.0);
+    EXPECT_DOUBLE_EQ(robot_vision::make_master_message(robot_vision::msg::ObstacleArray{}, true, -1000, -1000,
+        empty.obstacle_ratio, true).isredblue, 0.0);
+}

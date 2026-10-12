@@ -86,10 +86,11 @@ msg::LaneLine make_lane_message(const std_msgs::msg::Header &header, const LaneR
 // 장애물 좌표는 (전방 거리, 좌우 위치)이며 단위는 m, 미측정 값은 -1000이다.
 humanoid_interfaces::msg::VisionData make_master_message(
     const msg::ObstacleArray &array, bool frame_drop, double left_distance, double right_distance,
-    std::array<double, 3> obstacle_ratio)
+    std::array<double, 3> obstacle_ratio, bool red_blue_visible)
 {
     humanoid_interfaces::msg::VisionData message;
     message.frame_drop = frame_drop ? 1.0 : 0.0;
+    message.isredblue = (!frame_drop && red_blue_visible) ? 1.0 : 0.0;
     message.obstacle_ratio.fill(-1000.0);
     message.timestamp = rclcpp::Time(array.header.stamp).seconds();
     // 먼저 모든 측정 필드를 -1000으로 채운다. 영상 끊김이면 이 상태를 그대로 반환한다.

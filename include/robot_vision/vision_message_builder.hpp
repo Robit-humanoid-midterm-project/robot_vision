@@ -23,6 +23,7 @@ msg::LaneLine make_lane_message(const std_msgs::msg::Header &header, const LaneR
 humanoid_interfaces::msg::VisionData make_master_message(
     const msg::ObstacleArray &array, bool frame_drop,
     double left_distance = -1000.0, double right_distance = -1000.0,
-    std::array<double, 3> obstacle_ratio = {{-1000.0, -1000.0, -1000.0}});
+    std::array<double, 3> obstacle_ratio = {{-1000.0, -1000.0, -1000.0}},
+    bool red_blue_visible = false);
 
 } // namespace robot_vision
